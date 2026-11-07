@@ -20,11 +20,17 @@
 | `make sim-robots-headless [N=3]` | то же без окон |
 | `make teleop [ROBOT=ground_1]` | клавиатурное управление выбранным роботом (нужен TTY) |
 | `make check-phase1` | скриптовая проверка Фазы 1, результаты в `results/phase-1/` |
+| `make explore [SEED=1] [N=3]` | Фаза 2: мир по `seed`, роботы сами исследуют его (Gazebo с окном + RViz) |
+| `make explore-headless [SEED=1] [N=3] [MAXTIME=900]` | то же без окон, результаты в `results/phase-2/run_seed_<SEED>/` |
+| `make check-phase2 [CHECK_SEEDS="1 2 3 7"] [MAX_SIM_S=900]` | скриптовая проверка Фазы 2, результаты в `results/phase-2/check/` |
 | `make sim [WORLD=file.sdf]` | Gazebo с окном, по умолчанию `shapes.sdf` |
 | `make sim-headless` | Gazebo без окна на `configs/worlds/phase0_bench.sdf` |
 | `make video PHASE=0` | Видео Фазы 0 в `media/phase-0.mp4` (`scripts/video/phase0.sh`; кадры в `media/raw/phase-0/`, `--rerecord` снимает заново) |
 | `make video PHASE=1` | Видео Фазы 1 в `media/phase-1.mp4` (`scripts/video/phase1.sh`; сырьё в `media/raw/phase-1/`; снимается окно RViz на экране, пересъёмка: `scripts/video/phase1.sh --rerecord`) |
-| `make eval`, `make video PHASE=<n>` (n>1) | Заглушки (код 1), реализация позже |
+| `make video PHASE=2 [SEED=1] [RERECORD=1]` | Видео Фазы 2 в `media/phase-2.mp4` (`scripts/video/phase2.sh`; сырьё в `media/raw/phase-2/`: запись headless-прогона + кадры рисуются из неё, экран не нужен; из кэша собирается за ~1 мин, `RERECORD=1` пишет прогон заново, ~5 мин) |
+| `make eval`, `make video PHASE=<n>` (n>2) | Заглушки (код 1), реализация позже |
+
+Замер Фазы 2: `scripts/bench_phase2.sh headless|gui [секунды] [N]`. Отчёт: [docs/PHASE_2_REPORT.md](docs/PHASE_2_REPORT.md).
 
 Замер Фазы 1: `scripts/bench_phase1.sh headless|gui [секунды] [N]`. Отчёт: [docs/PHASE_1_REPORT.md](docs/PHASE_1_REPORT.md).
 

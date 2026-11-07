@@ -14,5 +14,20 @@
   <exec_depend>rviz2</exec_depend>
   <exec_depend>xacro</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_common</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_collision_monitor</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
+  <exec_depend>nav2_navfn_planner</exec_depend>
+  <exec_depend>rs_worlds</exec_depend>
+  <exec_depend>rs_interfaces</exec_depend>
+  <exec_depend>rs_mapping</exec_depend>
+  <exec_depend>rs_exploration</exec_depend>
+  <exec_depend>rs_eval</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

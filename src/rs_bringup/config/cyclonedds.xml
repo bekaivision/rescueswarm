@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Cyclone DDS: больше участников на один домен.
+     По умолчанию индекс участника ограничен (~9 процессов на домен), а у нас
+     ~10 процессов на робота (gz, мост, rsp, Nav2 ...). Подключение:
+       CYCLONEDDS_URI=file:///workspace/src/rs_bringup/config/cyclonedds.xml -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <Discovery>
+      <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

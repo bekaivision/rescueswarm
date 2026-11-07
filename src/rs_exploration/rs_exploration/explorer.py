@@ -1,0 +1,627 @@
+"""Узел explorer (по одному на робота): фронтиры на общей карте + децентрализованный аукцион.
+
+Цикл раз в plan_period секунд (время симуляции):
+ 1. фронтиры на /map, цена каждого = длина пути - выигрыш (размер) + штраф за близость к целям других;
+ 2. публикация лучших K ставок на /exploration/bids;
+ 3. по таблице ставок всех роботов то же детерминированное жадное распределение (auction.assign);
+ 4. своя цель отправляется в Nav2 (NavigateToPose); при неудаче цель в чёрный список.
+
+Роботы друг с другом: позы остальных приходят на /fleet/poses (rs_mapping/other_robots).
+Если робот стоит на месте с целью, а рядом (block_dist) другой, срабатывает правило приоритета:
+уступает робот с БОЛЬШИМ номером (отменяет цель, отъезжает от соседа, ждёт yield_hold с), робот с
+меньшим номером просто ждёт. Неудача цели рядом с другим роботом (near_robot_dist) не заносит цель
+в чёрный список надолго: помеха была в роботе, а не в цели (только на temp_blacklist_ttl с).
+Все команды скорости (в т. ч. манёвры отсюда) идут в cmd_vel_nav -> collision_monitor -> cmd_vel.
+"""
+import math
+import time
+
+import numpy as np
+import rclpy
+from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import Point, PoseArray, PoseStamped, Twist
+from lifecycle_msgs.msg import State
+from lifecycle_msgs.srv import GetState
+from nav2_msgs.action import NavigateToPose
+from nav2_msgs.srv import ManageLifecycleNodes
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from rclpy.action import ActionClient
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rs_interfaces.msg import ExplorationBid
+from visualization_msgs.msg import Marker, MarkerArray
+
+from rs_exploration import auction, frontier
+
+COLORS = {1: (1.0, 0.2, 0.2), 2: (0.2, 1.0, 0.3), 3: (0.3, 0.5, 1.0), 4: (1.0, 0.8, 0.1), 5: (0.9, 0.3, 1.0)}
+
+
+class Explorer(Node):
+    def __init__(self):
+        super().__init__('explorer')
+        P = self.declare_parameter
+        P('robot_id', 'ground_1')
+        P('region', [-11.0, -9.0, 11.0, 9.0])   # область поиска (xmin, ymin, xmax, ymax)
+        P('plan_period', 1.0)
+        P('num_bids', 8)
+        P('assign_radius', 2.5)
+        P('hysteresis', 3.0)          # бонус цене текущей цели, м
+        P('bid_ttl', 5.0)             # ставка старше этого -> робот считается выбывшим
+        P('min_cluster_cells', 8)
+        P('min_unknown_cells', 40)
+        P('clear_target', 0.3)
+        P('gain_weight', 1.0)
+        P('gain_cap', 3.0)            # м фронтира
+        P('other_goal_radius', 3.0)
+        P('other_goal_penalty', 6.0)
+        P('blacklist_radius', 1.0)
+        P('fail_blacklist_radius', 1.5)   # радиус для неудавшихся целей: соседние цели того же тупика тоже недостижимы
+        P('blacklist_ttl', 600.0)
+        P('goal_timeout', 150.0)
+        P('stuck_time', 30.0)
+        P('stuck_dist', 0.3)
+        P('publish_cells', False)
+        P('done_cycles', 3)
+        P('start_stagger', 12.0)      # робот i стартует через (i-1)*stagger с после активации Nav2: вход узкий
+        P('robots', ['ground_1', 'ground_2', 'ground_3'])               # все роботы (порядок = порядок поз в /fleet/poses)
+        P('near_robot_dist', 2.0)     # неудача цели ближе этого к другому роботу = временная
+        P('temp_blacklist_ttl', 20.0)
+        P('block_time', 4.0)          # стоим с целью дольше этого рядом с роботом = заблокированы
+        P('block_dist', 1.6)
+        P('yield_hold', 8.0)          # после уступки новых целей не берём столько секунд
+        P('yield_speed', 0.15)
+        P('yield_time', 2.0)
+        P('auction_delay', 0.3)       # аукцион через столько после публикации ставок: у всех свежая таблица
+
+        self.me = self.get_parameter('robot_id').value
+        self.idx = int(self.me.split('_')[-1])
+        self.region = list(self.get_parameter('region').value)
+        self.K = int(self.get_parameter('num_bids').value)
+        self.R = float(self.get_parameter('assign_radius').value)
+        self.get_logger().set_level(rclpy.logging.LoggingSeverity.INFO)
+
+        self.map_msg = None
+        self.pose = None
+        self.yaw = 0.0
+        self.fleet = {}     # robot_id -> (x, y) других роботов
+        self.last_move_t = 0.0
+        self.last_move_pose = None
+        self.hold_until = 0.0
+        self.block_logged = False
+        self.table = {}      # robot_id -> (получено, сообщение)
+        self.seq = 0
+        self.round = 0
+        self.goal = None     # (x, y) текущая цель
+        self.goal_handle = None
+        self.stale_handle = None
+        self.goal_t0 = 0.0
+        self.goal_id = 0
+        self.progress = None  # (t, x, y) последняя точка заметного движения
+        self.blacklist = []  # (x, y, до_какого_времени, радиус)
+        self.empty_cycles = 0
+        self.done = False
+        self.trail = []
+        self.prof = {}
+        self.stats = dict(yielded=0, waited=0, temp_fail=0, unstick=0, sent=0, reached=0, failed=0, stuck=0, timeout=0, switched=0)
+
+        map_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                             reliability=ReliabilityPolicy.RELIABLE)
+        self.create_subscription(OccupancyGrid, '/map', self._on_map, map_qos)
+        self.create_subscription(Odometry, 'odom', self._on_odom, 10)
+        self.create_subscription(PoseArray, '/fleet/poses', self._on_fleet, 5)
+        self.create_subscription(ExplorationBid, '/exploration/bids', self._on_bid, 20)
+        self.bid_pub = self.create_publisher(ExplorationBid, '/exploration/bids', 20)
+        self.mark_pub = self.create_publisher(MarkerArray, 'explorer/frontiers', 1)
+        self.goal_pub = self.create_publisher(PoseStamped, 'explorer/goal', 1)
+        self.trail_pub = self.create_publisher(Path, 'explorer/trail', 1)
+        self.nav = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        # цели шлём только когда Nav2 (bt_navigator) активен, иначе он их сразу отвергает
+        self.nav_active = False
+        self.state_cli = self.create_client(GetState, 'bt_navigator/get_state')
+        self.state_busy = False
+        self.lc_cli = self.create_client(ManageLifecycleNodes, 'lifecycle_manager_navigation/manage_nodes')
+        self.nav_wait_t0 = None
+        self.nav_active_t = 0.0
+        self.nav_retry_at = 45.0   # сек. ожидания до первой повторной попытки запуска Nav2
+        # снятие с мели: после серии неудач без движения - назад и поворот по cmd_vel
+        self.cmd_pub = self.create_publisher(Twist, 'cmd_vel_nav', 10)   # через collision_monitor
+        self.fail_streak = 0
+        self.streak_pose = None
+        self.streak_entries = []
+        self.unsticking = False
+        self.create_timer(float(self.get_parameter('plan_period').value), self._cycle)
+        self.create_timer(1.0, self._publish_trail)
+        self.create_timer(0.5, self._yield_tick)
+        self.create_timer(30.0, self._log_prof)
+        self.get_logger().info(f'explorer {self.me} запущен, область {self.region}')
+
+    # --- вспомогательное ----------------------------------------------------
+    def _now(self):
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def _tic(self, key, t0):
+        self.prof[key] = self.prof.get(key, 0.0) + time.process_time() - t0
+
+    def _log_prof(self):
+        self.get_logger().info('CPU за 30 с, с: ' + ', '.join(f'{k}={v:.2f}' for k, v in self.prof.items()))
+        self.prof = {}
+
+    def _on_map(self, msg):
+        t0 = time.process_time()
+        self.map_msg = msg
+        self._tic('map_cb', t0)
+
+    def _on_odom(self, msg):
+        t0 = time.process_time()
+        self._on_odom_impl(msg)
+        self._tic('odom', t0)
+
+    def _on_odom_impl(self, msg):
+        p = msg.pose.pose.position
+        self.pose = (p.x, p.y)
+        q = msg.pose.pose.orientation
+        self.yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+        if self.last_move_pose is None or math.hypot(p.x - self.last_move_pose[0], p.y - self.last_move_pose[1]) > 0.15:
+            self.last_move_pose = (p.x, p.y)
+            self.last_move_t = self._now()
+        if not self.trail or math.hypot(p.x - self.trail[-1][0], p.y - self.trail[-1][1]) > 0.2:
+            self.trail.append((p.x, p.y))
+
+    def _on_fleet(self, msg):
+        ids = list(self.get_parameter('robots').value)
+        self.fleet = {rid: (p.position.x, p.position.y) for rid, p in zip(ids, msg.poses)
+                      if rid != self.me and math.isfinite(p.position.x)}
+
+    def _nearest_other(self):
+        """(расстояние, id, (x, y)) ближайшего другого робота или (inf, None, None)."""
+        best = (float('inf'), None, None)
+        if self.pose is None:
+            return best
+        for rid, (x, y) in self.fleet.items():
+            d = math.hypot(x - self.pose[0], y - self.pose[1])
+            if d < best[0]:
+                best = (d, rid, (x, y))
+        return best
+
+    def _on_bid(self, msg):
+        if msg.robot_id != self.me:
+            self.table[msg.robot_id] = (self._now(), msg)
+
+    def _blacklisted(self, x, y, now):
+        return any(now < t and math.hypot(x - bx, y - by) < r for bx, by, t, r in self.blacklist)
+
+    def _add_blacklist(self, x, y, why, ttl=None, track=True):
+        ttl = float(self.get_parameter('blacklist_ttl').value) if ttl is None else ttl
+        rad = float(self.get_parameter('fail_blacklist_radius' if track else 'blacklist_radius').value)
+        self.blacklist.append((x, y, self._now() + ttl, rad))
+        if track:
+            self.streak_entries.append(self.blacklist[-1])
+        self.get_logger().warn(f'чёрный список ({why}): ({x:.1f}, {y:.1f}) на {ttl:.0f} с, всего {len(self.blacklist)}')
+
+    # --- основной цикл ------------------------------------------------------
+    def _cycle(self):
+        if self.map_msg is None or self.pose is None:
+            return
+        t0 = time.process_time()
+        now = self._now()
+        m = self.map_msg
+        h, w = m.info.height, m.info.width
+        data = np.asarray(m.data, dtype=np.int8).reshape(h, w)
+        self._tic('map_np', t0)
+        t0 = time.process_time()
+        if (data == 0).sum() < 50:
+            return  # карты ещё нет
+        gp = self.get_parameter
+        an = frontier.analyse(
+            data, m.info.resolution, m.info.origin.position.x, m.info.origin.position.y, self.region,
+            min_unknown=int(gp('min_unknown_cells').value), min_cluster=int(gp('min_cluster_cells').value),
+            clear_target=float(gp('clear_target').value))
+        self._tic('analyse', t0)
+        rx, ry = self.pose
+
+        # актуальные ставки других (старые = робот выбыл)
+        ttl = float(gp('bid_ttl').value)
+        for rid in [k for k, (t, _) in self.table.items() if now - t > ttl]:
+            del self.table[rid]
+            self.get_logger().warn(f'ставки {rid} устарели: считаем выбывшим')
+
+        # проверка текущей цели
+        self._check_goal(an, now)
+
+        # кандидаты
+        cands = []   # (cost, x, y, size)
+        if len(an.tx):
+            keep = np.array([not self._blacklisted(x, y, now) for x, y in zip(an.tx, an.ty)])
+            tx, ty, sz = an.tx[keep], an.ty[keep], an.size[keep]
+            if len(tx):
+                pl = frontier.path_costs(an, rx, ry, tx, ty)
+                if not np.isfinite(pl).any():
+                    pl = np.hypot(tx - rx, ty - ry) * 2.0   # запасной вариант: прямая x2
+                others = [(msg.current_goal.x, msg.current_goal.y)
+                          for _, msg in self.table.values() if msg.has_goal]
+                gain = np.minimum(sz * an.res, float(gp('gain_cap').value))
+                cost = pl - float(gp('gain_weight').value) * gain
+                orad = float(gp('other_goal_radius').value)
+                for i in range(len(tx)):
+                    if not np.isfinite(pl[i]):
+                        continue
+                    c = cost[i]
+                    if any(math.hypot(tx[i] - ox, ty[i] - oy) < orad for ox, oy in others):
+                        c += float(gp('other_goal_penalty').value)
+                    x, y = float(tx[i]), float(ty[i])
+                    if self.goal is not None and math.hypot(x - self.goal[0], y - self.goal[1]) < 1.5:
+                        c -= float(gp('hysteresis').value)
+                        x, y = self.goal
+                    cands.append((float(np.float32(c)), x, y, float(sz[i])))
+        cands.sort()
+        top = cands[:self.K]
+
+        # состояние "готово"
+        if not cands and self.goal is None:
+            self.empty_cycles += 1
+            if self.empty_cycles >= int(gp('done_cycles').value) and not self.done:
+                self.done = True
+                self.get_logger().info(f'exploration done: фронтиров нет, цели: {self.stats}')
+        else:
+            self.empty_cycles = 0
+            if self.done:
+                self.done = False
+                self.get_logger().info('фронтиры появились снова: продолжаем')
+
+        self._publish_bid(top)
+        self._publish_markers(an, cands)
+
+        # аукцион: чуть позже, когда ставки остальных этого раунда уже дошли
+        self.top, self.ncands, self.cycle_now = top, len(cands), now
+        holder = []
+
+        def run_auction():
+            holder[0].cancel()
+            self.destroy_timer(holder[0])
+            self._auction()
+        holder.append(self.create_timer(float(gp('auction_delay').value), run_auction))
+
+    def _auction(self):
+        top, now = self.top, self._now()
+        table = {self.me: [(c, x, y) for c, x, y, _ in top]}
+        for rid, (_, msg) in self.table.items():
+            table[rid] = [(float(c), p.x, p.y) for c, p in zip(msg.costs, msg.targets)]
+        res = auction.assign(table, self.R)
+        self.round += 1
+        desc = ' '.join(f'{rid[-1]}->({x:.1f},{y:.1f})c{c:.1f}' for rid, (x, y, c) in sorted(res.items()))
+        mine = res.get(self.me)
+        self._act(mine, now)
+        self._flush_cancel()
+        sz_t = sum(len(v) for v in table.values())
+        goal_s = f'({self.goal[0]:.1f},{self.goal[1]:.1f})' if self.goal else '-'
+        self.get_logger().info(f'аукцион #{self.round}: робот={len(table)} ставок={sz_t} фронтиров={self.ncands} | {desc or "нет"} | моя цель {goal_s}')
+
+    def _check_goal(self, an, now):
+        if self.goal is None:
+            return
+        gx, gy = self.goal
+        # цель больше не фронтир (уже исследована)?
+        near = False
+        if an.frontier.any():
+            fy, fx = np.nonzero(an.frontier)
+            wx, wy = an.world(fx, fy)
+            near = bool(np.min(np.hypot(wx - gx, wy - gy)) < 1.5)
+        if not near:
+            self.get_logger().info(f'цель ({gx:.1f}, {gy:.1f}) уже не фронтир: отмена')
+            self._cancel_goal()
+            return
+        if now - self.goal_t0 > float(self.get_parameter('goal_timeout').value):
+            self.stats['timeout'] += 1
+            self._cancel_goal()
+            self._fail_goal(gx, gy, 'тайм-аут цели')
+            return
+        t, px, py = self.progress
+        if math.hypot(self.pose[0] - px, self.pose[1] - py) > float(self.get_parameter('stuck_dist').value):
+            self.progress = (now, self.pose[0], self.pose[1])
+        elif now - t > float(self.get_parameter('stuck_time').value):
+            self.stats['stuck'] += 1
+            self._cancel_goal()
+            self._fail_goal(gx, gy, 'застрял')
+
+    def _act(self, mine, now):
+        if mine is None:
+            return   # нет назначения: продолжаем текущую цель, иначе ждём
+        x, y, _ = mine
+        if self.goal is not None and math.hypot(x - self.goal[0], y - self.goal[1]) < 1.0:
+            return   # то же самое
+        if self.unsticking or now < self.hold_until:
+            return
+        if not self.nav_active:
+            self._poll_nav_state()
+            return
+        if not self.nav.server_is_ready():
+            return
+        if now - self.nav_active_t < (self.idx - 1) * float(self.get_parameter('start_stagger').value):
+            return
+        if self.goal is not None:
+            self.stats['switched'] += 1
+        self._send_goal(x, y)
+
+    # --- роботы друг с другом -------------------------------------------------
+    def _fail_goal(self, x, y, why):
+        """Неудача цели. Рядом другой робот: виноват он, цель блокируем ненадолго и без снятия с мели."""
+        d, rid, _ = self._nearest_other()
+        if d < float(self.get_parameter('near_robot_dist').value):
+            self.stats['temp_fail'] += 1
+            self._add_blacklist(x, y, f'{why}, рядом {rid} в {d:.1f} м: временно',
+                                ttl=float(self.get_parameter('temp_blacklist_ttl').value), track=False)
+            return
+        self._add_blacklist(x, y, why)
+        self._note_failure()
+
+    def _yield_tick(self):
+        """Правило приоритета: стоим с целью рядом с другим роботом - уступает больший номер."""
+        if self.pose is None or self.goal is None or self.unsticking:
+            self.block_logged = False
+            return
+        now = self._now()
+        gp = self.get_parameter
+        if now - self.last_move_t < float(gp('block_time').value):
+            self.block_logged = False
+            return
+        d, rid, pos = self._nearest_other()
+        if d > float(gp('block_dist').value):
+            return
+        if int(rid.split('_')[-1]) < self.idx:
+            # приоритет у соседа: уступаем
+            self.stats['yielded'] += 1
+            gx, gy = self.goal
+            self.get_logger().warn(f'заблокирован роботом {rid} ({d:.1f} м): уступаю, цель ({gx:.1f}, {gy:.1f}) на паузу')
+            self.blacklist.append((gx, gy, now + float(gp('temp_blacklist_ttl').value), float(gp('blacklist_radius').value)))
+            self._cancel_goal()
+            self._flush_cancel()
+            self.hold_until = now + float(gp('yield_hold').value)
+            ahead = (pos[0] - self.pose[0]) * math.cos(self.yaw) + (pos[1] - self.pose[1]) * math.sin(self.yaw)
+            v = float(gp('yield_speed').value)
+            self._start_motion(-v if ahead > 0 else v, 0.0, float(gp('yield_time').value), 'отъезд от робота')
+        elif not self.block_logged:
+            # приоритет у меня: стою и жду, пока сосед уступит
+            self.block_logged = True
+            self.stats['waited'] += 1
+            self.get_logger().info(f'жду: робот {rid} ({d:.1f} м) мешает, у меня приоритет')
+
+    def _start_motion(self, vx, wz, dur, label):
+        """Короткий манёвр по cmd_vel_nav (через collision_monitor)."""
+        self.unsticking = True
+        t0 = self._now()
+        holder = []
+
+        def tick():
+            msg = Twist()
+            if self._now() - t0 < dur:
+                msg.linear.x, msg.angular.z = vx, wz
+                self.cmd_pub.publish(msg)
+                return
+            self.cmd_pub.publish(msg)
+            holder[0].cancel()
+            self.destroy_timer(holder[0])
+            self.unsticking = False
+            self.get_logger().info(f'{label}: закончено')
+        holder.append(self.create_timer(0.1, tick))
+
+    # --- Nav2 ---------------------------------------------------------------
+    def _reset_streak(self):
+        self.fail_streak = 0
+        self.streak_pose = None
+        self.streak_entries = []
+
+    def _note_failure(self):
+        if self.streak_pose is None or math.hypot(self.pose[0] - self.streak_pose[0], self.pose[1] - self.streak_pose[1]) > 1.0:
+            self.fail_streak = 0
+            self.streak_pose = self.pose
+            self.streak_entries = self.streak_entries[-1:]
+        self.fail_streak += 1
+        if self.fail_streak >= 2 and not self.unsticking:
+            self._unstick()
+
+    def _unstick(self):
+        # робот не двигается, а цели падают: виноваты не цели. Возвращаем их из чёрного списка.
+        self.unsticking = True
+        self.stats['unstick'] += 1
+        for e in self.streak_entries:
+            if e in self.blacklist:
+                self.blacklist.remove(e)
+        self.get_logger().warn(f'застряли ({self.fail_streak} неудач подряд без движения): сдаём назад и поворачиваем')
+        self._reset_streak()
+        # Nav2 BackUp/Spin не помогают, если корпус уже касается препятствия (footprint в
+        # лидарной зоне): их проверка столкновений отказывает. Едем вслепую по cmd_vel.
+        self.unstick_t0 = self._now()
+        self.unstick_dir = -self.unstick_dir if hasattr(self, 'unstick_dir') else 1.0
+        self.unstick_timer = self.create_timer(0.1, self._unstick_tick)
+
+    def _unstick_tick(self):
+        t = self._now() - self.unstick_t0
+        msg = Twist()
+        if t < 2.5:
+            msg.linear.x = -0.15
+        elif t < 4.5:
+            msg.angular.z = 1.0 * self.unstick_dir
+        else:
+            self.cmd_pub.publish(msg)
+            self.unstick_timer.cancel()
+            self.destroy_timer(self.unstick_timer)
+            self.unsticking = False
+            self.get_logger().info('снятие с мели закончено')
+            return
+        self.cmd_pub.publish(msg)
+
+    def _poll_nav_state(self):
+        # редкий сбой старта: lifecycle-переход потерялся и узел навсегда 'unconfigured'
+        if self.nav_wait_t0 is None:
+            self.nav_wait_t0 = self._now()
+        if self._now() - self.nav_wait_t0 > self.nav_retry_at and self.lc_cli.service_is_ready():
+            self.nav_retry_at += 45.0
+            req = ManageLifecycleNodes.Request()
+            req.command = ManageLifecycleNodes.Request.STARTUP
+            self.lc_cli.call_async(req)
+            self.get_logger().warn('Nav2 не стал активным: повторный запуск через lifecycle_manager')
+        if self.state_busy or not self.state_cli.service_is_ready():
+            return
+        self.state_busy = True
+        fut = self.state_cli.call_async(GetState.Request())
+
+        def done(f):
+            self.state_busy = False
+            r = f.result()
+            if r is not None and r.current_state.id == State.PRIMARY_STATE_ACTIVE:
+                self.nav_active = True
+                self.nav_active_t = self._now()
+                self.get_logger().info('Nav2 активен, начинаем исследование')
+        fut.add_done_callback(done)
+
+    def _send_goal(self, x, y):
+        self.goal_id += 1
+        gid = self.goal_id
+        g = NavigateToPose.Goal()
+        g.pose.header.frame_id = 'world'
+        g.pose.header.stamp = self.get_clock().now().to_msg()
+        g.pose.pose.position.x = x
+        g.pose.pose.position.y = y
+        yaw = math.atan2(y - self.pose[1], x - self.pose[0])
+        g.pose.pose.orientation.z = math.sin(yaw / 2)
+        g.pose.pose.orientation.w = math.cos(yaw / 2)
+        self.stale_handle = None   # новая цель вытеснит старую в Nav2
+        self.goal = (x, y)
+        self.goal_handle = None
+        self.goal_t0 = self._now()
+        self.progress = (self.goal_t0, self.pose[0], self.pose[1])
+        self.last_move_t = self.goal_t0
+        self.stats['sent'] += 1
+        self.goal_pub.publish(g.pose)
+        self.get_logger().info(f'цель #{gid}: ({x:.1f}, {y:.1f})')
+        fut = self.nav.send_goal_async(g)
+        fut.add_done_callback(lambda f, gid=gid: self._on_accept(f, gid))
+
+    def _on_accept(self, fut, gid):
+        gh = fut.result()
+        if gid != self.goal_id:
+            if gh.accepted:
+                gh.cancel_goal_async()   # цель успели отменить до принятия
+            return
+        if not gh.accepted:
+            self.stats['failed'] += 1
+            self._add_blacklist(*self.goal, 'Nav2 отклонил цель')
+            self.goal = None
+            return
+        self.goal_handle = gh
+        gh.get_result_async().add_done_callback(lambda f, gid=gid: self._on_result(f, gid))
+
+    def _on_result(self, fut, gid):
+        if gid != self.goal_id or self.goal is None:
+            return   # устаревший или отменённый нами результат
+        status = fut.result().status
+        gx, gy = self.goal
+        if status == GoalStatus.STATUS_SUCCEEDED:
+            self.stats['reached'] += 1
+            self.get_logger().info(f'цель #{gid} достигнута')
+            # если фронтир на месте остался, он бесполезен: исключаем
+            self.blacklist.append((gx, gy, self._now() + float(self.get_parameter('blacklist_ttl').value),
+                                   float(self.get_parameter('blacklist_radius').value)))
+            self._reset_streak()
+        else:
+            self.stats['failed'] += 1
+            self._fail_goal(gx, gy, f'Nav2 статус {status}')
+        self.goal = None
+        self.goal_handle = None
+
+    def _cancel_goal(self):
+        # отмену откладываем до конца аукциона: если сразу пойдёт новая цель, Nav2 сам
+        # вытеснит старую (отмена + новая цель подряд = новая цель прерывается)
+        if self.goal_handle is not None:
+            self.stale_handle = self.goal_handle
+        self.goal = None
+        self.goal_handle = None
+        self.goal_id += 1   # результат отменённой цели игнорируем
+
+    def _flush_cancel(self):
+        gh, self.stale_handle = self.stale_handle, None
+        if gh is not None and self.goal is None:
+            gh.cancel_goal_async()
+
+    # --- публикации ---------------------------------------------------------
+    def _publish_bid(self, top):
+        msg = ExplorationBid()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'world'
+        msg.robot_id = self.me
+        self.seq += 1
+        msg.seq = self.seq
+        msg.has_goal = self.goal is not None
+        if self.goal:
+            msg.current_goal = Point(x=self.goal[0], y=self.goal[1])
+        msg.targets = [Point(x=x, y=y) for _, x, y, _ in top]
+        msg.costs = [c for c, *_ in top]
+        msg.done = self.done
+        self.bid_pub.publish(msg)
+
+    def _publish_markers(self, an, cands):
+        col = COLORS.get(self.idx, (1.0, 1.0, 1.0))
+        arr = MarkerArray()
+        m = Marker()
+        m.header.frame_id = 'world'
+        m.ns = f'{self.me}_candidates'
+        m.id = 0
+        m.type = Marker.SPHERE_LIST
+        m.action = Marker.ADD
+        m.scale.x = m.scale.y = m.scale.z = 0.25
+        m.color.r, m.color.g, m.color.b, m.color.a = (*col, 0.9)
+        m.pose.orientation.w = 1.0
+        m.points = [Point(x=x, y=y, z=0.2) for _, x, y, _ in cands]
+        arr.markers.append(m)
+        if self.get_parameter('publish_cells').value and an.frontier.any():
+            c = Marker()
+            c.header.frame_id = 'world'
+            c.ns = 'frontier_cells'
+            c.id = 1
+            c.type = Marker.POINTS
+            c.action = Marker.ADD
+            c.scale.x = c.scale.y = 0.06
+            c.color.r = c.color.g = c.color.b = 1.0
+            c.color.a = 0.7
+            c.pose.orientation.w = 1.0
+            fy, fx = np.nonzero(an.frontier)
+            wx, wy = an.world(fx[::2], fy[::2])
+            c.points = [Point(x=float(a), y=float(b), z=0.05) for a, b in zip(wx, wy)]
+            arr.markers.append(c)
+        self.mark_pub.publish(arr)
+
+    def _publish_trail(self):
+        if not self.trail:
+            return
+        t0 = time.process_time()
+        self._publish_trail_impl()
+        self._tic('trail', t0)
+
+    def _publish_trail_impl(self):
+        p = Path()
+        p.header.frame_id = 'world'
+        p.header.stamp = self.get_clock().now().to_msg()
+        for x, y in self.trail[-3000:]:
+            ps = PoseStamped()
+            ps.header = p.header
+            ps.pose.position.x, ps.pose.position.y = x, y
+            ps.pose.orientation.w = 1.0
+            p.poses.append(ps)
+        self.trail_pub.publish(p)
+
+
+def main():
+    rclpy.init()
+    node = Explorer()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

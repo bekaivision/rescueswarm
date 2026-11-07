@@ -15,6 +15,9 @@
   <xacro:arg name="thermal_width" default="160"/>
   <xacro:arg name="thermal_height" default="120"/>
   <xacro:arg name="imu_rate" default="50"/>
+  <!-- gt_pose=true: /odom и TF берутся из истинной позы Gazebo (OdometryPublisher),
+       одометрия колёс уходит в /odom_wheel и в непробрасываемый TF-топик -->
+  <xacro:arg name="gt_pose" default="false"/>
   <xacro:property name="ns" value="$(arg robot_name)"/>
   <xacro:property name="wr" value="0.08"/>   <!-- радиус колеса -->
   <xacro:property name="ws" value="0.34"/>   <!-- колея -->
@@ -133,6 +136,7 @@
   </gazebo>
 
   <gazebo>
+    <xacro:unless value="$(arg gt_pose)">
     <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
       <left_joint>left_wheel_joint</left_joint>
       <right_joint>right_wheel_joint</right_joint>
@@ -147,6 +151,31 @@
       <max_linear_acceleration>2</max_linear_acceleration>
       <max_angular_acceleration>4</max_angular_acceleration>
     </plugin>
+    </xacro:unless>
+    <xacro:if value="$(arg gt_pose)">
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>${ws}</wheel_separation>
+      <wheel_radius>${wr}</wheel_radius>
+      <topic>/${ns}/cmd_vel</topic>
+      <odom_topic>/${ns}/odom_wheel</odom_topic>
+      <tf_topic>/${ns}/tf_wheel</tf_topic>
+      <frame_id>${ns}/odom</frame_id>
+      <child_frame_id>${ns}/base_link</child_frame_id>
+      <odom_publish_frequency>30</odom_publish_frequency>
+      <max_linear_acceleration>2</max_linear_acceleration>
+      <max_angular_acceleration>4</max_angular_acceleration>
+    </plugin>
+      <plugin filename="gz-sim-odometry-publisher-system" name="gz::sim::systems::OdometryPublisher">
+        <odom_frame>${ns}/odom</odom_frame>
+        <robot_base_frame>${ns}/base_link</robot_base_frame>
+        <odom_topic>/${ns}/odom</odom_topic>
+        <tf_topic>/${ns}/tf</tf_topic>
+        <odom_publish_frequency>30</odom_publish_frequency>
+        <dimensions>3</dimensions>
+      </plugin>
+    </xacro:if>
     <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
       <topic>/${ns}/joint_states</topic>
     </plugin>

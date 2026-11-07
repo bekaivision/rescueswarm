@@ -2,7 +2,7 @@
 
 У каждого робота: свой robot_state_publisher (namespace + frame_prefix), свой
 ros_gz_bridge, статический TF world -> ground_i/odom по позе старта.
-Аргументы: n, headless, rviz, world, spacing, а также частоты и разрешения сенсоров.
+Аргументы: n, headless, rviz, rviz_config, world, spacing, poses, gt_pose, а также частоты и разрешения сенсоров.
 """
 import os
 
@@ -43,6 +43,17 @@ def launch_setup(context):
     use_rviz = LaunchConfiguration('rviz').perform(context).lower() == 'true'
     spacing = float(LaunchConfiguration('spacing').perform(context))
     world = LaunchConfiguration('world').perform(context)
+    gt_pose = LaunchConfiguration('gt_pose').perform(context).lower() == 'true'
+    poses_arg = LaunchConfiguration('poses').perform(context).strip()
+    rviz_config = LaunchConfiguration('rviz_config').perform(context)
+    if not rviz_config:
+        rviz_config = os.path.join(get_package_share_directory('rs_bringup'), 'rviz', 'robots.rviz')
+    poses = []
+    if poses_arg:
+        # "x,y,yaw;x,y,yaw;..."
+        poses = [tuple(float(v) for v in p.split(',')) for p in poses_arg.split(';') if p.strip()]
+        if len(poses) < n:
+            raise RuntimeError(f'poses: задано {len(poses)} поз, нужно {n}')
     bringup = get_package_share_directory('rs_bringup')
     desc = get_package_share_directory('rs_description')
     if not world:
@@ -61,9 +72,16 @@ def launch_setup(context):
         arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'], output='screen'))
 
     mappings = {k: LaunchConfiguration(k).perform(context) for k in SENSOR_ARGS}
+    if gt_pose:
+        mappings['gt_pose'] = 'true'
     for i in range(1, n + 1):
         ns = f'ground_{i}'
-        x, y, yaw = 0.0, (i - (n + 1) / 2.0) * spacing, 0.0
+        if poses:
+            x, y, yaw = poses[i - 1]
+        else:
+            x, y, yaw = 0.0, (i - (n + 1) / 2.0) * spacing, 0.0
+        # gt_pose: odom уже в мировой системе, значит world -> odom единичный
+        tx, ty, tyaw = (0.0, 0.0, 0.0) if gt_pose else (x, y, yaw)
         urdf = xacro.process_file(xacro_file, mappings={'robot_name': ns, **mappings}).toxml()
 
         actions.append(Node(
@@ -82,13 +100,13 @@ def launch_setup(context):
         actions.append(Node(
             package='tf2_ros', executable='static_transform_publisher',
             name=f'{ns}_world_tf', output='log', parameters=[sim_time],
-            arguments=['--x', str(x), '--y', str(y), '--z', '0', '--yaw', str(yaw),
+            arguments=['--x', str(tx), '--y', str(ty), '--z', '0', '--yaw', str(tyaw),
                        '--frame-id', 'world', '--child-frame-id', f'{ns}/odom']))
 
     if use_rviz:
         actions.append(Node(
             package='rviz2', executable='rviz2', output='log', parameters=[sim_time],
-            arguments=['-d', os.path.join(bringup, 'rviz', 'robots.rviz')]))
+            arguments=['-d', rviz_config]))
     return actions
 
 
@@ -99,6 +117,9 @@ def generate_launch_description():
         DeclareLaunchArgument('rviz', default_value='true', description='запустить RViz'),
         DeclareLaunchArgument('world', default_value='', description='путь к SDF (по умолчанию phase1.sdf)'),
         DeclareLaunchArgument('spacing', default_value='2.0', description='расстояние между роботами по y, м'),
+        DeclareLaunchArgument('gt_pose', default_value='false', description='истинная поза из Gazebo вместо одометрии колёс'),
+        DeclareLaunchArgument('poses', default_value='', description='"x,y,yaw;x,y,yaw;..." (пусто: ряд по y с шагом spacing)'),
+        DeclareLaunchArgument('rviz_config', default_value='', description='путь к .rviz (по умолчанию robots.rviz)'),
     ]
     decl += [DeclareLaunchArgument(k, default_value=v) for k, v in SENSOR_ARGS.items()]
     return LaunchDescription(decl + [OpaqueFunction(function=launch_setup)])

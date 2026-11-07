@@ -1,0 +1,302 @@
+Visualization Manager:
+  Class: ''
+  Displays:
+  - Class: rviz_default_plugins/Map
+    Name: map
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /map
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Color Scheme: map
+    Alpha: 1
+    Draw Behind: true
+    Use Timestamp: false
+  - Class: rviz_default_plugins/MarkerArray
+    Name: ground_1 frontiers
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_1/explorer/frontiers
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Namespaces: {}
+  - Class: rviz_default_plugins/Pose
+    Name: ground_1 goal
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_1/explorer/goal
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Shape: Arrow
+    Color: 255; 60; 60
+    Alpha: 1
+    Head Length: 0.5
+    Head Radius: 0.3
+    Shaft Length: 1
+    Shaft Radius: 0.1
+  - Class: rviz_default_plugins/Path
+    Name: ground_1 trail
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_1/explorer/trail
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Color: 255; 60; 60
+    Line Style: Lines
+    Line Width: 0.05
+    Alpha: 1
+    Buffer Length: 1
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0.02
+    Pose Style: None
+  - Class: rviz_default_plugins/RobotModel
+    Name: ground_1 model
+    Enabled: true
+    Value: true
+    Description Source: Topic
+    Description Topic:
+      Value: /ground_1/robot_description
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter topic: ''
+    TF Prefix: ground_1
+    Visual Enabled: true
+    Collision Enabled: false
+    Alpha: 1
+    Update Interval: 0
+  - Class: rviz_default_plugins/PointCloud2
+    Name: ground_1 lidar
+    Enabled: false
+    Value: false
+    Topic:
+      Value: /ground_1/lidar/points
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Filter size: 10
+    Style: Points
+    Size (Pixels): 2
+    Size (m): 0.03
+    Alpha: 1
+    Color Transformer: FlatColor
+    Color: 255; 60; 60
+    Use Fixed Frame: true
+    Position Transformer: XYZ
+    Selectable: false
+  - Class: rviz_default_plugins/MarkerArray
+    Name: ground_2 frontiers
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_2/explorer/frontiers
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Namespaces: {}
+  - Class: rviz_default_plugins/Pose
+    Name: ground_2 goal
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_2/explorer/goal
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Shape: Arrow
+    Color: 60; 255; 80
+    Alpha: 1
+    Head Length: 0.5
+    Head Radius: 0.3
+    Shaft Length: 1
+    Shaft Radius: 0.1
+  - Class: rviz_default_plugins/Path
+    Name: ground_2 trail
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_2/explorer/trail
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Color: 60; 255; 80
+    Line Style: Lines
+    Line Width: 0.05
+    Alpha: 1
+    Buffer Length: 1
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0.02
+    Pose Style: None
+  - Class: rviz_default_plugins/RobotModel
+    Name: ground_2 model
+    Enabled: true
+    Value: true
+    Description Source: Topic
+    Description Topic:
+      Value: /ground_2/robot_description
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter topic: ''
+    TF Prefix: ground_2
+    Visual Enabled: true
+    Collision Enabled: false
+    Alpha: 1
+    Update Interval: 0
+  - Class: rviz_default_plugins/PointCloud2
+    Name: ground_2 lidar
+    Enabled: false
+    Value: false
+    Topic:
+      Value: /ground_2/lidar/points
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Filter size: 10
+    Style: Points
+    Size (Pixels): 2
+    Size (m): 0.03
+    Alpha: 1
+    Color Transformer: FlatColor
+    Color: 60; 255; 80
+    Use Fixed Frame: true
+    Position Transformer: XYZ
+    Selectable: false
+  - Class: rviz_default_plugins/MarkerArray
+    Name: ground_3 frontiers
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_3/explorer/frontiers
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Namespaces: {}
+  - Class: rviz_default_plugins/Pose
+    Name: ground_3 goal
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_3/explorer/goal
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Shape: Arrow
+    Color: 80; 130; 255
+    Alpha: 1
+    Head Length: 0.5
+    Head Radius: 0.3
+    Shaft Length: 1
+    Shaft Radius: 0.1
+  - Class: rviz_default_plugins/Path
+    Name: ground_3 trail
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_3/explorer/trail
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Color: 80; 130; 255
+    Line Style: Lines
+    Line Width: 0.05
+    Alpha: 1
+    Buffer Length: 1
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0.02
+    Pose Style: None
+  - Class: rviz_default_plugins/RobotModel
+    Name: ground_3 model
+    Enabled: true
+    Value: true
+    Description Source: Topic
+    Description Topic:
+      Value: /ground_3/robot_description
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter topic: ''
+    TF Prefix: ground_3
+    Visual Enabled: true
+    Collision Enabled: false
+    Alpha: 1
+    Update Interval: 0
+  - Class: rviz_default_plugins/PointCloud2
+    Name: ground_3 lidar
+    Enabled: false
+    Value: false
+    Topic:
+      Value: /ground_3/lidar/points
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Filter size: 10
+    Style: Points
+    Size (Pixels): 2
+    Size (m): 0.03
+    Alpha: 1
+    Color Transformer: FlatColor
+    Color: 80; 130; 255
+    Use Fixed Frame: true
+    Position Transformer: XYZ
+    Selectable: false
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: world
+    Frame Rate: 30
+  Name: root
+  Tools:
+  - Class: rviz_default_plugins/MoveCamera
+  - Class: rviz_default_plugins/Select
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Angle: 0
+      Scale: 28
+      Near Clip Distance: 0.01
+      Far Clip Distance: 100
+      X: 0
+      Y: 0
+      Name: Current View
+      Target Frame: <Fixed Frame>
+      Value: TopDownOrtho (rviz_default_plugins)
+    Saved: null
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 950
+  Width: 1100
+  X: 50
+  Y: 50
