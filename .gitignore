@@ -1,0 +1,20 @@
+# colcon
+build/
+install/
+log/
+
+# Experiments
+results/
+media/
+*.mcap
+*.db3
+
+# Fetched dependencies
+external/
+
+# Python
+__pycache__/
+.venv/
+
+# Local environment
+.env

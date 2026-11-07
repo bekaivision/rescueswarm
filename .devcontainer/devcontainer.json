@@ -1,0 +1,14 @@
+{
+  "name": "rescueswarm",
+  "dockerComposeFile": ["../docker/compose.yaml"],
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "none",
+  "overrideCommand": true,
+  "remoteUser": "dev",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-vscode.cpptools", "ms-python.python", "ms-iot.vscode-ros"]
+    }
+  }
+}

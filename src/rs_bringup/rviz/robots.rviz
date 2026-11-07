@@ -1,0 +1,317 @@
+Visualization Manager:
+  Class: ''
+  Displays:
+  - Class: rviz_default_plugins/Grid
+    Name: Grid
+    Enabled: true
+    Value: true
+    Cell Size: 1
+    Plane Cell Count: 20
+    Color: 160; 160; 164
+    Line Style:
+      Line Width: 0.03
+      Value: Lines
+    Normal Cell Count: 0
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0
+    Plane: XY
+    Reference Frame: <Fixed Frame>
+    Alpha: 0.5
+  - Class: rviz_default_plugins/TF
+    Name: TF
+    Enabled: true
+    Value: true
+    Show Names: false
+    Show Axes: true
+    Show Arrows: true
+    Marker Scale: 0.5
+    Update Interval: 0
+    Frame Timeout: 15
+    Frames:
+      All Enabled: true
+    Tree: {}
+  - Class: rviz_default_plugins/RobotModel
+    Name: ground_1 model
+    Enabled: true
+    Value: true
+    Description Source: Topic
+    Description Topic:
+      Value: /ground_1/robot_description
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter topic: ''
+    TF Prefix: ground_1
+    Visual Enabled: true
+    Collision Enabled: false
+    Alpha: 1
+    Mass Properties:
+      Inertia: false
+      Mass: false
+    Links:
+      All Links Enabled: true
+      Expand Joint Details: false
+      Expand Link Details: false
+      Expand Tree: false
+      Link Tree Style: Links in Alphabetic Order
+    Update Interval: 0
+  - Class: rviz_default_plugins/PointCloud2
+    Name: ground_1 lidar
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_1/lidar/points
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Filter size: 10
+    Style: Points
+    Size (Pixels): 2
+    Size (m): 0.03
+    Alpha: 1
+    Color Transformer: FlatColor
+    Color: 255; 85; 0
+    Use Fixed Frame: true
+    Use rainbow: true
+    Invert Rainbow: false
+    Autocompute Intensity Bounds: true
+    Axis: Z
+    Channel Name: intensity
+    Decay Time: 0
+    Position Transformer: XYZ
+    Selectable: true
+    Max Color: 255; 255; 255
+    Min Color: 0; 0; 0
+    Max Intensity: 4096
+    Min Intensity: 0
+  - Class: rviz_default_plugins/Image
+    Name: ground_1 rgb
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_1/rgb/image_raw
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+    Normalize Range: true
+    Median window: 5
+    Max Value: 1
+    Min Value: 0
+  - Class: rviz_default_plugins/Image
+    Name: ground_1 thermal
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_1/thermal/image_raw
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+    Normalize Range: true
+    Median window: 5
+    Max Value: 1
+    Min Value: 0
+  - Class: rviz_default_plugins/RobotModel
+    Name: ground_2 model
+    Enabled: true
+    Value: true
+    Description Source: Topic
+    Description Topic:
+      Value: /ground_2/robot_description
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter topic: ''
+    TF Prefix: ground_2
+    Visual Enabled: true
+    Collision Enabled: false
+    Alpha: 1
+    Mass Properties:
+      Inertia: false
+      Mass: false
+    Links:
+      All Links Enabled: true
+      Expand Joint Details: false
+      Expand Link Details: false
+      Expand Tree: false
+      Link Tree Style: Links in Alphabetic Order
+    Update Interval: 0
+  - Class: rviz_default_plugins/PointCloud2
+    Name: ground_2 lidar
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_2/lidar/points
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Filter size: 10
+    Style: Points
+    Size (Pixels): 2
+    Size (m): 0.03
+    Alpha: 1
+    Color Transformer: FlatColor
+    Color: 0; 170; 255
+    Use Fixed Frame: true
+    Use rainbow: true
+    Invert Rainbow: false
+    Autocompute Intensity Bounds: true
+    Axis: Z
+    Channel Name: intensity
+    Decay Time: 0
+    Position Transformer: XYZ
+    Selectable: true
+    Max Color: 255; 255; 255
+    Min Color: 0; 0; 0
+    Max Intensity: 4096
+    Min Intensity: 0
+  - Class: rviz_default_plugins/Image
+    Name: ground_2 rgb
+    Enabled: false
+    Value: false
+    Topic:
+      Value: /ground_2/rgb/image_raw
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+    Normalize Range: true
+    Median window: 5
+    Max Value: 1
+    Min Value: 0
+  - Class: rviz_default_plugins/Image
+    Name: ground_2 thermal
+    Enabled: false
+    Value: false
+    Topic:
+      Value: /ground_2/thermal/image_raw
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+    Normalize Range: true
+    Median window: 5
+    Max Value: 1
+    Min Value: 0
+  - Class: rviz_default_plugins/RobotModel
+    Name: ground_3 model
+    Enabled: true
+    Value: true
+    Description Source: Topic
+    Description Topic:
+      Value: /ground_3/robot_description
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter topic: ''
+    TF Prefix: ground_3
+    Visual Enabled: true
+    Collision Enabled: false
+    Alpha: 1
+    Mass Properties:
+      Inertia: false
+      Mass: false
+    Links:
+      All Links Enabled: true
+      Expand Joint Details: false
+      Expand Link Details: false
+      Expand Tree: false
+      Link Tree Style: Links in Alphabetic Order
+    Update Interval: 0
+  - Class: rviz_default_plugins/PointCloud2
+    Name: ground_3 lidar
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ground_3/lidar/points
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Filter size: 10
+    Style: Points
+    Size (Pixels): 2
+    Size (m): 0.03
+    Alpha: 1
+    Color Transformer: FlatColor
+    Color: 85; 255; 0
+    Use Fixed Frame: true
+    Use rainbow: true
+    Invert Rainbow: false
+    Autocompute Intensity Bounds: true
+    Axis: Z
+    Channel Name: intensity
+    Decay Time: 0
+    Position Transformer: XYZ
+    Selectable: true
+    Max Color: 255; 255; 255
+    Min Color: 0; 0; 0
+    Max Intensity: 4096
+    Min Intensity: 0
+  - Class: rviz_default_plugins/Image
+    Name: ground_3 rgb
+    Enabled: false
+    Value: false
+    Topic:
+      Value: /ground_3/rgb/image_raw
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+    Normalize Range: true
+    Median window: 5
+    Max Value: 1
+    Min Value: 0
+  - Class: rviz_default_plugins/Image
+    Name: ground_3 thermal
+    Enabled: false
+    Value: false
+    Topic:
+      Value: /ground_3/thermal/image_raw
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+    Normalize Range: true
+    Median window: 5
+    Max Value: 1
+    Min Value: 0
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: world
+    Frame Rate: 30
+  Name: root
+  Tools:
+  - Class: rviz_default_plugins/MoveCamera
+  - Class: rviz_default_plugins/Select
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 14
+      Focal Point:
+        X: 4
+        Y: 0
+        Z: 0
+      Pitch: 0.9
+      Yaw: 3.3
+      Name: Current View
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz_default_plugins)
+    Saved: null
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Width: 1500
+  X: 50
+  Y: 50
