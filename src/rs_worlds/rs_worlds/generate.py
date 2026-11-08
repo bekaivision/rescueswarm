@@ -17,7 +17,7 @@ import yaml
 from PIL import Image, ImageDraw
 from scipy import ndimage
 
-GENERATOR_VERSION = '1.2'
+GENERATOR_VERSION = '1.3'
 WORLD_NAME = 'rescue'
 RES = 0.05            # размер клетки карты, м
 ROBOT_RADIUS = 0.30   # радиус диска робота для проходимости, м
@@ -26,7 +26,21 @@ MARGIN = 3.0          # поле вокруг здания в границах �
 MASK_OUTSIDE = 0.0    # маска покрытия: только внутренняя площадь здания
 MASK_EXTRA = 0.5      # расширение маски поверх радиуса робота
 ENTRANCE_W = 1.6
-PERSON_SIZE = (1.7, 0.45, 0.25)
+# Человек: меш Rescue Randy лёжа лицом вверх, головой к +x модели.
+# Меш (Collada в см, Gazebo сам применяет unit): Z вверх, ноги в z=0, голова z=1.821,
+# руки x=±0.682, лицо в сторону -y (проверено рендером), y=-0.178..+0.179.
+# Поворот pose rpy=(-pi/2, 0, -pi/2) (фикс. оси X, затем Z):
+#   Rx(-90): (x,y,z) -> (x,z,-y): лицо -y -> вверх, голова +z -> +y;
+#   Rz(-90): (x,y) -> (y,-x): голова +y -> +x. Итог: x'=z, y'=-x, z'=-y.
+# Бокс после поворота: x' 0..1.821, y' ±0.682, z' -0.179..0.178.
+# Сдвиг pose: x' -= 0.9105 (центр тела в начале модели), z' += 0.18 (спина на земле, z>=0.001).
+PERSON_MESH_URI = 'model://rescue_randy/meshes/rescue_randy.dae'
+PERSON_MESH_POSE = (-0.9105, 0.0, 0.18, -1.5708, 0.0, -1.5708)
+PERSON_SIZE = (1.82, 1.36, 0.36)   # габариты меша лёжа (длина, ширина с руками, высота)
+# Для зазоров и занятости берём только тело: руки тонкие, полная ширина 1.36 м
+# с зазором 0.7 м резко увеличивала число повторов генерации (small: 44 -> 772 за seed 1..20).
+PERSON_BODY = (1.82, 0.50)
+PERSON_TEX = 'model://rescue_randy/materials/textures/rescue_randy_'
 PERSON_TEMP_K = 310.0
 # ложные цели: тип -> (температура K, размер (длина, ширина, высота) м, форма)
 DECOY_TYPES = {
@@ -297,7 +311,7 @@ def place_people(rng, lay, g, occ, an, rooms_reach):
     k = lay['n_people']
     people = []
     pocc = g.empty()
-    sx, sy, _ = PERSON_SIZE
+    sx, sy = PERSON_BODY
     reachable_rooms = [i for i, ok in enumerate(rooms_reach) if ok]
     other_rooms = [i for i, ok in enumerate(rooms_reach) if not ok]
     if not reachable_rooms:
@@ -411,7 +425,7 @@ def _try_build(rng, size, seed):
         return None
     people_occ = g.empty()
     for p in people:
-        g.stamp(people_occ, p['x'], p['y'], PERSON_SIZE[0], PERSON_SIZE[1], p['yaw'])
+        g.stamp(people_occ, p['x'], p['y'], PERSON_BODY[0], PERSON_BODY[1], p['yaw'])
     # ложные цели ставятся после людей, чтобы раскладка людей не менялась
     decoys = place_decoys(rng, lay, g, occ0 | people_occ, rooms_reach, people)
     if decoys is None:
@@ -512,8 +526,8 @@ def ground_truth(w):
     for k, p in enumerate(w['people'], 1):
         # человек достижим, если рядом с его телом есть клетка, куда доезжает центр робота
         near = False
-        j0, j1, i0, i1, m = g.shape_mask(p['x'], p['y'], PERSON_SIZE[0] + 1.3,
-                                         PERSON_SIZE[1] + 1.3, p['yaw'])
+        j0, j1, i0, i1, m = g.shape_mask(p['x'], p['y'], PERSON_BODY[0] + 1.3,
+                                         PERSON_BODY[1] + 1.3, p['yaw'])
         if j1 >= j0:
             near = bool((an['reach'][j0:j1 + 1, i0:i1 + 1] & m).any())
         people.append(dict(id=f'person_{k}', x=_r(p['x']), y=_r(p['y']), yaw=_r(p['yaw']),
@@ -627,15 +641,21 @@ def world_sdf(w):
         a(f'        <visual name="v">{geo}{_mat(col)}</visual>')
         a('      </link>')
         a('    </model>')
-    pl, pw, ph = PERSON_SIZE
-    geo = f'<geometry><box><size>{f4(pl)} {f4(pw)} {f4(ph)}</size></box></geometry>'
+    geo = f'<geometry><mesh><uri>{PERSON_MESH_URI}</uri></mesh></geometry>'
+    ppose = ' '.join(f4(v) for v in PERSON_MESH_POSE)
+    pmat = ('<material><diffuse>1 1 1 1</diffuse><specular>1 1 1 1</specular><pbr><metal>'
+            f'<albedo_map>{PERSON_TEX}albedo.png</albedo_map>'
+            f'<normal_map>{PERSON_TEX}normal.png</normal_map>'
+            f'<metalness_map>{PERSON_TEX}metalness.png</metalness_map>'
+            f'<roughness_map>{PERSON_TEX}roughness.png</roughness_map>'
+            '</metal></pbr></material>')
     for k, p in enumerate(w['people'], 1):
         a(f'    <model name="person_{k}">')
         a('      <static>true</static>')
-        a(f'      <pose>{f4(p["x"])} {f4(p["y"])} {f4(ph / 2.0)} 0 0 {f4(p["yaw"])}</pose>')
+        a(f'      <pose>{f4(p["x"])} {f4(p["y"])} 0 0 0 {f4(p["yaw"])}</pose>')
         a('      <link name="link">')
-        a(f'        <collision name="c">{geo}</collision>')
-        a(f'        <visual name="v">{geo}{_mat((0.87, 0.68, 0.55))}')
+        a(f'        <collision name="c"><pose>{ppose}</pose>{geo}</collision>')
+        a(f'        <visual name="v"><pose>{ppose}</pose>{geo}{pmat}')
         a('          <plugin filename="gz-sim-thermal-system" name="gz::sim::systems::Thermal">')
         a('            <temperature>%.1f</temperature>' % PERSON_TEMP_K)
         a('          </plugin>')

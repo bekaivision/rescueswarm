@@ -19,11 +19,24 @@ import sys
 
 MATCH_M = 1.0
 MIN_RECALL = 0.90
+# Дополнительная (не основная) метрика: расстояние до оси тела, а не до центра.
+# Отметка по частичному виду лежит у конца тела (Rescue Randy 1.82 м), до центра бывает > 1 м.
+BODY_HALF_M = 0.91
 
 
-def match(marks, objs):
-    """Жадное сопоставление: [(dist, mark_idx, obj_idx)] по возрастанию, один к одному."""
-    pairs = sorted((math.hypot(m['x'] - o['x'], m['y'] - o['y']), i, j)
+def _dist(m, o, body):
+    if body and 'yaw' in o and 'type' not in o:
+        c, s = math.cos(o['yaw']), math.sin(o['yaw'])
+        dx, dy = m['x'] - o['x'], m['y'] - o['y']
+        a = max(-BODY_HALF_M, min(BODY_HALF_M, dx * c + dy * s))
+        return math.hypot(dx - a * c, dy - a * s)
+    return math.hypot(m['x'] - o['x'], m['y'] - o['y'])
+
+
+def match(marks, objs, body=False):
+    """Жадное сопоставление: [(dist, mark_idx, obj_idx)] по возрастанию, один к одному.
+    body=True: для людей расстояние до оси тела (доп. метрика), для ловушек до центра."""
+    pairs = sorted((_dist(m, o, body), i, j)
                    for i, m in enumerate(marks) for j, o in enumerate(objs))
     used_m, used_o, out = set(), set(), {}
     for d, i, j in pairs:
@@ -109,8 +122,40 @@ def evaluate(d, seed, max_s):
         loc_err_mean=round(st.mean(err), 3) if err else None, loc_err_max=round(max(err), 3) if err else None,
         t_first_confirmed=tc[0] if tc else None, t_last_confirmed=tc[-1] if tc else None,
         unresolved_candidates=unresolved, per_person=per_person, per_decoy=per_decoy, n_marks=len(marks))
+    # доп. метрика: сопоставление по оси тела
+    mb = match(marks, objs, body=True)
+    mb_marks = {i for i, _ in mb.values()}
+    res.update(
+        body_confirmed_reachable=sum(1 for j, p in enumerate(people) if p['reachable'] and j in mb
+                                     and marks[mb[j][0]]['status'] == 'CONFIRMED'),
+        body_ghosts_confirmed=sum(1 for i, m in enumerate(marks) if i not in mb_marks and m['status'] == 'CONFIRMED'),
+        body_decoys_confirmed=sum(1 for k in range(len(decoys)) if np_ + k in mb
+                                  and marks[mb[np_ + k][0]]['status'] == 'CONFIRMED'))
 
     rows = list(csv.DictReader(open(f'{d}/coverage.csv'))) if os.path.exists(f'{d}/coverage.csv') else []
+    # RGB (YOLO) как дополнительный признак; для прогонов без RGB все счётчики нулевые
+    rh = lambda m: m.get('rgb_hits', 0)  # noqa: E731
+    ghost_marks = [m for i, m in enumerate(marks) if i not in matched_marks]
+    unm = tot = 0
+    if os.path.exists(f'{d}/rgb_detections.jsonl'):
+        for l in open(f'{d}/rgb_detections.jsonl'):
+            try:
+                tot += 1
+                unm += json.loads(l)['mark'] is None
+            except Exception:  # noqa: BLE001
+                tot -= 1
+    dt = []
+    for m in marks:
+        tc_ = confirmed_time(m)
+        if tc_ is not None:
+            dt.append(tc_ - m['first_seen'])
+    res.update(
+        rgb_confirmed_marks=sum(m.get('reason', '').startswith('temp_and_rgb') for m in marks if m['status'] == 'CONFIRMED'),
+        rgb_people_hit=sum(1 for j in range(np_) if j in mt and rh(marks[mt[j][0]]) > 0),
+        rgb_decoys_hit=sum(1 for k in range(len(decoys)) if (np_ + k) in mt and rh(marks[mt[np_ + k][0]]) > 0),
+        rgb_ghosts_hit=sum(1 for m in ghost_marks if rh(m) > 0),
+        rgb_boxes=tot, rgb_boxes_unmatched=unm,
+        median_first_seen_to_confirmed=round(st.median(dt), 1) if dt else None)
     res['final_coverage'] = float(rows[-1]['coverage']) if rows else 0.0
     log = open(f'{d}/launch.log', errors='replace').read().splitlines() if os.path.exists(f'{d}/launch.log') else []
     comp = next((l for l in log if 'EXPLORATION COMPLETE' in l), None)
@@ -139,6 +184,13 @@ def evaluate(d, seed, max_s):
     for f in fails:
         print('FAIL:', f)
     f1 = lambda v: '-' if v is None else f'{v:.1f}'  # noqa: E731
+    if res['rgb_boxes']:
+        print(f'RGB: seed {seed}: рамок {res["rgb_boxes"]} (без отметки {res["rgb_boxes_unmatched"]}), '
+              f'temp_and_rgb {res["rgb_confirmed_marks"]}, с rgb_hits: люди {res["rgb_people_hit"]}/{np_}, '
+              f'ловушки {res["rgb_decoys_hit"]}/{len(decoys)}, ghost {res["rgb_ghosts_hit"]}, '
+              f'медиана first_seen->CONFIRMED {f1(res["median_first_seen_to_confirmed"])} с')
+    print(f'BODY: seed {seed}: по оси тела CONFIRMED достижимых {res["body_confirmed_reachable"]}/{n_reach}, '
+          f'ложно CONFIRMED: ghost {res["body_ghosts_confirmed"]}, ловушки {res["body_decoys_confirmed"]}')
     if not fails:
         print(f'OK: seed {seed}: confirmed {conf_all}/{np_} (достижимых {conf_reach}/{n_reach}), '
               f'ловушек отвергнуто {res["decoys_rejected"]}/{len(decoys)}, ghost {sum(ghosts.values())}, '
@@ -152,6 +204,9 @@ def summary(chk, seeds):
          '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |']
     tot_conf = tot_reach = 0
     fl = []
+    rg = dict(boxes=0, unm=0, tr=0, ph=0, dh=0, gh=0)
+    meds = []
+    bd = dict(cr=0, gc=0, dc=0)
     f1 = lambda v: '-' if v is None else f'{v:.1f}'  # noqa: E731
     for s in seeds:
         try:
@@ -160,6 +215,17 @@ def summary(chk, seeds):
             L.append(f'| {s} | нет данных |' + ' |' * 12)
             fl.append(f'seed {s}: нет check.json')
             continue
+        rg['boxes'] += c.get('rgb_boxes', 0)
+        rg['unm'] += c.get('rgb_boxes_unmatched', 0)
+        rg['tr'] += c.get('rgb_confirmed_marks', 0)
+        rg['ph'] += c.get('rgb_people_hit', 0)
+        rg['dh'] += c.get('rgb_decoys_hit', 0)
+        rg['gh'] += c.get('rgb_ghosts_hit', 0)
+        if c.get('median_first_seen_to_confirmed') is not None:
+            meds.append(c['median_first_seen_to_confirmed'])
+        bd['cr'] += c.get('body_confirmed_reachable', 0)
+        bd['gc'] += c.get('body_ghosts_confirmed', 0)
+        bd['dc'] += c.get('body_decoys_confirmed', 0)
         tot_conf += c['confirmed_reachable']
         tot_reach += c['reachable']
         g = c['ghosts']
@@ -171,6 +237,13 @@ def summary(chk, seeds):
         fl += c['fails']
     rec = tot_conf / tot_reach if tot_reach else 0.0
     L.append(f'\nRecall CONFIRMED достижимых людей по всем seed: {tot_conf}/{tot_reach} = {rec:.1%} (порог {MIN_RECALL:.0%})')
+    L.append(f"Доп. метрика (до оси тела, порог {MATCH_M} м): CONFIRMED достижимых {bd['cr']}/{tot_reach}, "
+             f"ложно CONFIRMED ghost {bd['gc']}, ловушки {bd['dc']}")
+    if rg['boxes']:
+        L.append(f"RGB: рамок {rg['boxes']} (без отметки {rg['unm']}), CONFIRMED по temp_and_rgb {rg['tr']}, "
+                 f"с rgb_hits: люди {rg['ph']}, ловушки {rg['dh']}, ghost {rg['gh']}")
+    if meds:
+        L.append(f'Медиана (по seed) времени first_seen -> CONFIRMED: {st.median(meds):.1f} с')
     if rec < MIN_RECALL:
         fl.append(f'recall CONFIRMED достижимых {rec:.1%} < {MIN_RECALL:.0%}')
     L.append('\nОшибки:' if fl else '\nОшибок нет.')

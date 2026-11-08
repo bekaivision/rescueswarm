@@ -23,9 +23,9 @@
 | `make explore [SEED=1] [N=3]` | Фаза 2: мир по `seed`, роботы сами исследуют его (Gazebo с окном + RViz) |
 | `make explore-headless [SEED=1] [N=3] [MAXTIME=900]` | то же без окон, результаты в `results/phase-2/run_seed_<SEED>/` |
 | `make check-phase2 [CHECK_SEEDS="1 2 3 7"] [MAX_SIM_S=900]` | скриптовая проверка Фазы 2, результаты в `results/phase-2/check/` |
-| `make search [SEED=1] [N=3] [MAXTIME=900]` | Фаза 3: поиск людей по тепловизору (исследование + осмотр кандидатов; Gazebo с окном + RViz) |
-| `make search-headless [SEED=1] [N=3] [MAXTIME=900]` | то же без окон, результаты в `results/phase-3/run_seed_<SEED>/` (`people.json`, `detections.jsonl`) |
-| `make check-phase3 [CHECK_SEEDS="1 2 3 7"] [MAX_SIM_S=900]` | скриптовая проверка Фазы 3 (`scripts/phase3_eval.py`), результаты в `results/phase-3/check/` |
+| `make search [SEED=1] [N=3] [MAXTIME=900] [RGB=1\|0]` | Фаза 3: поиск людей по тепловизору и YOLO по RGB (RGB=0: только тепловизор; исследование + осмотр кандидатов; Gazebo с окном + RViz) |
+| `make search-headless [SEED=1] [N=3] [MAXTIME=900] [RGB=1\|0]` | то же без окон, результаты в `results/phase-3/run_seed_<SEED>/` (`people.json`, `detections.jsonl`, `rgb_detections.jsonl`); RGB=0: в `results/phase-3/run_seed_<SEED>_thermal_only/` |
+| `make check-phase3 [CHECK_SEEDS="1 2 3 7"] [MAX_SIM_S=900] [RGB=1\|0]` | скриптовая проверка Фазы 3 (`scripts/phase3_eval.py`), результаты в `results/phase-3/check/`; RGB=0 (только тепловизор): `results/phase-3/check_thermal_only/` |
 | `make sim [WORLD=file.sdf]` | Gazebo с окном, по умолчанию `shapes.sdf` |
 | `make sim-headless` | Gazebo без окна на `configs/worlds/phase0_bench.sdf` |
 | `make video PHASE=0` | Видео Фазы 0 в `media/phase-0.mp4` (`scripts/video/phase0.sh`; кадры в `media/raw/phase-0/`, `--rerecord` снимает заново) |

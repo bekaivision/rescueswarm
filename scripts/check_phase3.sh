@@ -5,10 +5,12 @@
 # Для каждого seed: мир с ловушками, 3 робота ищут людей сами (исследование + осмотр кандидатов);
 # потом сопоставление отметок с эталоном (phase3_eval.py). Результаты:
 #   results/phase-3/check/seed_<S>/ и results/phase-3/check/summary.md
+# RGB=0 (make check-phase3 RGB=0): без YOLO по RGB, результаты в results/phase-3/check_thermal_only/.
 set -uo pipefail
 SEEDS="${1:-${SEEDS:-1 2 3 7}}"; N="${2:-${N:-3}}"; MAX_SIM_S="${3:-${MAX_SIM_S:-900}}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CHK="$ROOT/results/phase-3/check"; mkdir -p "$CHK"
+RGB="${RGB:-1}"; SUF=""; [ "$RGB" = 0 ] && SUF="_thermal_only"
+CHK="$ROOT/results/phase-3/check$SUF"; mkdir -p "$CHK"
 NAME=rescueswarm-check-phase3
 export HOST_UID="$(id -u)" HOST_GID="$(id -g)" XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
 COMPOSE=(docker compose -p rescueswarm -f "$ROOT/docker/compose.yaml")
@@ -19,13 +21,13 @@ dx() { docker exec "$NAME" bash -c "source /workspace/install/setup.bash; $*"; }
 killall_in() { docker exec "$NAME" bash -c 'pkill -9 -f "[/]workspace/install"; pkill -9 -f "[g]z sim"; pkill -9 -f "[r]uby"; pkill -9 -f "[/]opt/ros"; true' >/dev/null 2>&1; }
 
 run_seed() {   # $1 = seed
-  local S="$1" OUT="$CHK/seed_$1" REL="results/phase-3/check/seed_$1" try=0
+  local S="$1" OUT="$CHK/seed_$1" REL="results/phase-3/check$SUF/seed_$1" try=0
   while : ; do
     rm -rf "$OUT"; mkdir -p "$OUT"
     cleanup
     "${COMPOSE[@]}" run -d --rm -T --name "$NAME" dev sleep infinity >/dev/null
     sleep 3
-    docker exec -d "$NAME" bash -c "cd /workspace && source install/setup.bash && ros2 launch rs_bringup explore.launch.py seed:=$S n:=$N headless:=true rviz:=false target_coverage:=0.95 max_time:=$MAX_SIM_S out_dir:=/workspace/$REL > $REL/launch.log 2>&1"
+    docker exec -d "$NAME" bash -c "cd /workspace && source install/setup.bash && ros2 launch rs_bringup explore.launch.py seed:=$S n:=$N headless:=true rviz:=false rgb:=$([ "$RGB" = 0 ] && echo false || echo true) target_coverage:=0.95 max_time:=$MAX_SIM_S out_dir:=/workspace/$REL > $REL/launch.log 2>&1"
     local t0=$SECONDS ok=0 started=0
     while [ $((SECONDS - t0)) -lt $((MAX_SIM_S * 13 / 10 + 240)) ]; do
       sleep 10

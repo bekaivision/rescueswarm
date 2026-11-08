@@ -8,6 +8,7 @@ find_package(builtin_interfaces REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ExplorationBid.msg"
   "msg/ThermalDetection.msg"
+  "msg/RgbDetection.msg"
   "msg/PersonMark.msg"
   "msg/PersonMarkArray.msg"
   DEPENDENCIES std_msgs geometry_msgs builtin_interfaces)

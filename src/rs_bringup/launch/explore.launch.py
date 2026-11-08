@@ -76,6 +76,9 @@ def launch_setup(context):
                 package='rs_perception', executable='thermal_detector', name='thermal_detector',
                 namespace=r, output='screen',
                 parameters=[sim, {'robot': r, 'debug_dir': os.path.join(out_dir, 'debug')}]))
+        if arg('rgb').lower() == 'true':
+            actions.append(Node(package='rs_perception', executable='rgb_detector', name='rgb_detector',
+                                output='screen', parameters=[sim, {'robots': robots}]))
         actions.append(Node(package='rs_perception', executable='people_fusion', name='people_fusion',
                             output='screen', parameters=[sim, {'out_dir': out_dir}]))
     # покрытие достигнуто / время вышло: гасим весь запуск
@@ -94,6 +97,7 @@ def generate_launch_description():
         DeclareLaunchArgument('out_dir', default_value='', description='по умолчанию /workspace/results/phase-2/run_seed_<seed>'),
         DeclareLaunchArgument('target_coverage', default_value='0.95'),
         DeclareLaunchArgument('perception', default_value='true', description='тепловые детекторы и слияние отметок людей'),
+        DeclareLaunchArgument('rgb', default_value='true', description='YOLO по RGB как дополнительный признак (нужен perception)'),
         DeclareLaunchArgument('max_time', default_value='0', description='сим. секунды, 0 = без лимита'),
     ]
     return LaunchDescription(decl + [OpaqueFunction(function=launch_setup)])

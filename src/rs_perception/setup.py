@@ -20,5 +20,6 @@ setup(
     entry_points={'console_scripts': [
         'thermal_detector = rs_perception.thermal_detector:main',
         'people_fusion = rs_perception.people_fusion:main',
+        'rgb_detector = rs_perception.rgb_detector:main',
     ]},
 )

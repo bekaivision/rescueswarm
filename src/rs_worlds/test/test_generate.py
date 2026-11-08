@@ -65,7 +65,7 @@ def test_invariants(size, seed):
     k = 0
     for p in w['people']:
         assert not g.hits(w['wall_occ'] | w['rubble_occ'], p['x'], p['y'],
-                          G.PERSON_SIZE[0], G.PERSON_SIZE[1], p['yaw'])
+                          G.PERSON_BODY[0], G.PERSON_BODY[1], p['yaw'])
         k += 1
     lo, hi = G.SIZES[size]['people']
     assert lo <= len(w['people']) <= hi

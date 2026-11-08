@@ -13,7 +13,7 @@ from geometry_msgs.msg import Point, PoseArray
 from nav_msgs.msg import OccupancyGrid
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from rs_interfaces.msg import PersonMark, PersonMarkArray, ThermalDetection
+from rs_interfaces.msg import PersonMark, PersonMarkArray, RgbDetection, ThermalDetection
 from visualization_msgs.msg import Marker, MarkerArray
 
 from rs_perception import marks as M
@@ -45,6 +45,8 @@ class PeopleFusion(Node):
         self.create_subscription(OccupancyGrid, '/map', self._on_map, map_qos)
         self.create_subscription(PoseArray, '/fleet/poses', self._on_poses, 5)
         self.create_subscription(ThermalDetection, '/perception/detections', self._on_det, 50)
+        self.create_subscription(RgbDetection, '/perception/rgb_detections', self._on_rgb, 50)
+        self.poses = {}     # робот -> (x, y, yaw) последняя поза
         self.pub_marks = self.create_publisher(PersonMarkArray, '/people/marks', 5)
         self.pub_markers = self.create_publisher(MarkerArray, '/people/markers', 5)
         self.pub_insp = self.create_publisher(PersonMarkArray, '/people/inspect_requests', 5)
@@ -52,6 +54,8 @@ class PeopleFusion(Node):
         self.n_det = 0
         self.ticks = 0
         self.det_log = open(os.path.join(self.out_dir, 'detections.jsonl'), 'w') if self.out_dir else None
+        self.rgb_log = open(os.path.join(self.out_dir, 'rgb_detections.jsonl'), 'w') if self.out_dir else None
+        self.n_rgb = 0
 
     def _now(self):
         return self.get_clock().now().nanoseconds * 1e-9
@@ -84,6 +88,7 @@ class PeopleFusion(Node):
             if not math.isfinite(p.position.x):
                 continue
             yaw = math.atan2(2 * p.orientation.z * p.orientation.w, 1 - 2 * p.orientation.z ** 2)
+            self.poses[rid] = (p.position.x, p.position.y, yaw)
             for m in self.fusion.observe_view(rid, p.position.x, p.position.y, yaw, t, self._los):
                 self.get_logger().info(
                     f'{m.id} -> REJECTED (not_seen_close) at ({m.x:.2f}, {m.y:.2f}) n={m.n_obs} close={m.n_close}')
@@ -108,6 +113,27 @@ class PeopleFusion(Node):
                 f'T={m.mean_temp():.1f} h={m.height():.2f} len={m.length():.2f}')
             self._write_json()
 
+    def _on_rgb(self, d):
+        pose = self.poses.get(d.robot)
+        if pose is None:
+            return
+        t = d.header.stamp.sec + d.header.stamp.nanosec * 1e-9
+        was = {m.id: m.status for m in self.fusion.marks}
+        m = self.fusion.rgb_observe(d.robot, pose[0], pose[1], pose[2], d.bearing_rad,
+                                    d.half_width_rad, d.score, t, self._los)
+        self.n_rgb += 1
+        if self.rgb_log:
+            self.rgb_log.write(json.dumps(dict(
+                t=round(t, 2), robot=d.robot, bearing=round(d.bearing_rad, 3), half_w=round(d.half_width_rad, 3),
+                score=round(d.score, 3), mark=m.id if m else None)) + '\n')
+            if self.n_rgb % 20 == 0:
+                self.rgb_log.flush()
+        if m is not None and was.get(m.id) != m.status:
+            self.get_logger().info(
+                f'{m.id} -> {M.NAMES[m.status]} ({m.reason}) at ({m.x:.2f}, {m.y:.2f}) n={m.n_obs} close={m.n_close} '
+                f'rgb={m.rgb_hits} T={m.mean_temp():.1f} h={m.height():.2f}')
+            self._write_json()
+
     def _msg(self, m):
         pm = PersonMark()
         pm.id = m.id
@@ -120,6 +146,8 @@ class PeopleFusion(Node):
         pm.mean_temp_k = float(m.mean_temp())
         pm.height_m = float(m.height())
         pm.length_m = float(m.length())
+        pm.rgb_hits = m.rgb_hits
+        pm.rgb_score_max = float(m.rgb_score_max)
         pm.first_seen.sec, pm.first_seen.nanosec = _t(m.first_seen)
         pm.status_time.sec, pm.status_time.nanosec = _t(m.status_time)
         return pm
@@ -159,7 +187,7 @@ class PeopleFusion(Node):
             tx.pose.orientation.w = 1.0
             tx.scale.z = 0.35
             tx.color.r = tx.color.g = tx.color.b = tx.color.a = 1.0
-            tx.text = f'{m.id} {M.NAMES[m.status][:4]} {pm.confidence:.2f}'
+            tx.text = f'{m.id} {M.NAMES[m.status][:4]} {pm.confidence:.2f}' + (' rgb' if m.rgb_hits > 0 else '')
             mk.markers.append(tx)
         for rid in self.fusion.removed:
             for ns in ('mark', 'label'):
@@ -183,7 +211,8 @@ class PeopleFusion(Node):
                 robots=list(m.robots), min_range_m=round(m.min_range, 3), mean_temp_k=nz(m.mean_temp()),
                 height_m=nz(m.height()), length_m=nz(m.length()), first_seen=round(m.first_seen, 2),
                 status_time=round(m.status_time, 2),
-                reason=m.reason,
+                reason=m.reason, rgb_hits=m.rgb_hits, rgb_score_max=round(m.rgb_score_max, 3),
+                rgb_robots=list(m.rgb_robots),
                 history=[dict(t=round(t, 2), status=s, reason=r) for t, s, r in m.history]))
         tmp = os.path.join(self.out_dir, 'people.json.tmp')
         with open(tmp, 'w') as f:
@@ -202,6 +231,8 @@ def main():
         node._write_json()
         if node.det_log:
             node.det_log.close()
+        if node.rgb_log:
+            node.rgb_log.close()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

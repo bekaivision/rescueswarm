@@ -14,3 +14,6 @@ float32 height_m
 float32 length_m
 builtin_interfaces/Time first_seen
 builtin_interfaces/Time status_time
+# число RGB-подтверждений (YOLO) и лучшая уверенность
+uint32 rgb_hits
+float32 rgb_score_max

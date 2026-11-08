@@ -26,7 +26,16 @@ DEFAULTS = dict(
     neg_time_s=2.0,           # суммарное время в поле зрения без детекций
     neg_gap_s=0.6,            # разрыв больше этого обнуляет накопление
     neg_cam_forward_m=0.25,   # смещение камеры вперёд от центра робота
+    # RGB (YOLO) - дополнительный признак: не создаёт отметок и ничего не отвергает
+    rgb_range_m=5.0,          # дальше этого RGB-рамки к отметкам не привязываем
+    rgb_tol_rad=0.05,         # допуск по углу сверх половины ширины рамки
+    rgb_confirm_hits=3,       # столько RGB-попаданий + температура = CONFIRMED (если высота неизвестна)
+    rgb_conf_bonus=0.2,       # добавка к уверенности CANDIDATE при полном числе попаданий
 )
+
+
+def p_bonus(p, m):
+    return p['rgb_conf_bonus'] * min(1.0, m.rgb_hits / max(p['rgb_confirm_hits'], 1))
 
 
 class Mark:
@@ -46,6 +55,9 @@ class Mark:
         self.reason = 'first_detection'
         self.neg = {}       # робот -> [накоплено с, время последнего кадра]
         self.len_hi = DEFAULTS['len_hi']
+        self.rgb_hits = 0
+        self.rgb_score_max = 0.0
+        self.rgb_robots = []
 
     @property
     def x(self):
@@ -78,6 +90,8 @@ class Fusion:
         self.marks = []
         self.next_id = 1
         self.removed = []    # id слитых отметок (для удаления маркеров)
+        self.rgb_unmatched = 0   # RGB-рамки без отметки (только для отчёта)
+        self.rgb_total = 0
 
     def _set(self, m, status, t, reason):
         m.status = status
@@ -169,6 +183,9 @@ class Fusion:
             a.heights += b.heights
             a.lengths += b.lengths
             a.first_seen = min(a.first_seen, b.first_seen)
+            a.rgb_hits += b.rgb_hits
+            a.rgb_score_max = max(a.rgb_score_max, b.rgb_score_max)
+            a.rgb_robots += [r for r in b.rgb_robots if r not in a.rgb_robots]
             a.neg = {}
             if keep_status != a.status:
                 self._set(a, keep_status, max(a.status_time, b.status_time), keep_reason + '+merge')
@@ -197,6 +214,8 @@ class Fusion:
             new, why = REJECTED, 'too_tall'
         elif h_known and h <= p['max_height_m']:
             new, why = CONFIRMED, 'person_shape_and_temp'
+        elif not h_known and m.rgb_hits >= p['rgb_confirm_hits']:
+            new, why = CONFIRMED, 'temp_and_rgb'    # высоты нет, но температура и RGB согласны
         else:
             return False    # форма пока не подходит и не отвергает: ждём ещё видов
         self._set(m, new, t, why)
@@ -209,9 +228,11 @@ class Fusion:
         temp = m.mean_temp()
         fit = max(0.0, 1.0 - abs(temp - 309.0) / 10.0) if not math.isnan(temp) else 0.0
         c = s * (0.4 + 0.6 * fit)
-        if m.status == CONFIRMED:
-            c = max(c, 0.8)
-        return min(c, 0.99) if m.status == CANDIDATE else min(max(c, 0.8), 1.0)
+        if m.status == CANDIDATE:
+            c += p_bonus(self.p, m)
+            return min(c, 0.99)
+        floor = 0.9 if m.rgb_hits >= 1 else 0.8
+        return min(max(c, floor), 1.0)
 
     def reported(self):
         return [m for m in self.marks if m.n_obs >= self.p['min_obs_report']]
@@ -251,3 +272,41 @@ class Fusion:
                 self._set(m, REJECTED, t, 'not_seen_close')
                 out.append(m)
         return out
+
+    def rgb_observe(self, robot, rx, ry, yaw, bearing, half_w, score, t, los=None):
+        """RGB-рамка человека (угол от оси камеры, + влево). Привязка к отметке по углу; возвращает Mark или None.
+
+        Только добавляет подтверждение: отметок не создаёт и не отвергает. Увиденная по RGB отметка
+        не может быть отвергнута как not_seen_close (сбрасываем накопление).
+        """
+        p = self.p
+        self.rgb_total += 1
+        cx = rx + p['neg_cam_forward_m'] * math.cos(yaw)
+        cy = ry + p['neg_cam_forward_m'] * math.sin(yaw)
+        tol = half_w + p['rgb_tol_rad']
+        cands = []
+        for m in self.reported():
+            if m.status == REJECTED:
+                continue
+            d = math.hypot(m.x - cx, m.y - cy)
+            if not (p['neg_min_range_m'] <= d <= p['rgb_range_m']):
+                continue
+            ang = (math.atan2(m.y - cy, m.x - cx) - yaw + math.pi) % (2 * math.pi) - math.pi
+            off = abs(ang - bearing)
+            if off > tol:
+                continue
+            if los is not None and not los(cx, cy, m.x, m.y):
+                continue
+            cands.append((d, off, m))
+        if not cands:
+            self.rgb_unmatched += 1
+            return None
+        # несколько отметок в рамке: ближайшая по дальности; иначе по углу
+        m = min(cands, key=lambda c: (c[0], c[1]))[2] if len(cands) > 1 else cands[0][2]
+        m.rgb_hits += 1
+        m.rgb_score_max = max(m.rgb_score_max, float(score))
+        if robot not in m.rgb_robots:
+            m.rgb_robots.append(robot)
+        m.neg = {}
+        self._evaluate(m, t)
+        return m

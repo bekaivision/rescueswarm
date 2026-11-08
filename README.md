@@ -15,7 +15,10 @@ people may be found. All work runs in simulation.
   with a decentralized auction, Nav2 per robot, coverage over time. Three robots
   cover 95–96 % of a random building with no human control. See
   [report](docs/PHASE_2_REPORT.md).
-- **Next:** Phase 3, finding people with the thermal camera.
+- **Phase 3 and 3b, done:** thermal people search with decoys (fire, batteries, warm
+  debris), candidate inspection through the auction, and YOLO on RGB as an extra cue
+  with the Rescue Randy model. See [report](docs/PHASE_3_REPORT.md).
+- **Next:** Phase 4, real SLAM.
 
 The full research plan is in [docs/PLAN.md](docs/PLAN.md). Plan and reports are
 written in Russian.
