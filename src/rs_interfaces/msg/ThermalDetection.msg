@@ -10,3 +10,8 @@ uint32 blob_px
 float32 height_m
 float32 length_m
 uint32 n_lidar_pts
+# с каким запасом вокруг пятна нашлись точки лидара: 0 ровно по пятну, 1 (1x1 px), 2 (2x4 px); 255 нет точек
+uint8 lidar_pad
+# ширина и высота пятна, px
+uint16 blob_w_px
+uint16 blob_h_px

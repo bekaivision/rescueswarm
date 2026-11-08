@@ -104,7 +104,7 @@ class PeopleFusion(Node):
             self.det_log.write(json.dumps(dict(
                 t=round(t, 2), robot=d.robot, x=round(d.position.x, 3), y=round(d.position.y, 3),
                 range=round(d.range_m, 2), temp=round(d.mean_temp_k, 2), max_temp=round(d.max_temp_k, 2),
-                px=d.blob_px, h=nz(d.height_m), len=nz(d.length_m), n_pts=d.n_lidar_pts, mark=m.id)) + '\n')
+                px=d.blob_px, h=nz(d.height_m), len=nz(d.length_m), n_pts=d.n_lidar_pts, pad=d.lidar_pad, bw=d.blob_w_px, bh=d.blob_h_px, mark=m.id)) + '\n')
             if self.n_det % 20 == 0:
                 self.det_log.flush()
         if changed:

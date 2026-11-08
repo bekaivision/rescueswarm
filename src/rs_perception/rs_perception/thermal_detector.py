@@ -41,6 +41,7 @@ class ThermalDetector(Node):
         P('max_cloud_age_s', 0.2)
         P('tf_timeout_s', 0.1)
         P('hfov', 1.047)               # если нет camera_info
+        P('floor_contact_height', True)   # пятно не касается пола: высоте по лидару не верим
         P('debug_dir', '')             # куда сложить один кадр с рамками (пусто = не писать)
         g = lambda k: self.get_parameter(k).value  # noqa: E731
         self.g = g
@@ -52,7 +53,7 @@ class ThermalDetector(Node):
         self.clouds = deque(maxlen=6)    # (stamp_s, frame_id, ndarray (N,3))
         self.debug_saved = 0
         self.debug_best = 40
-        self.n_img = self.n_det = self.n_drop = self.n_incons = 0
+        self.n_img = self.n_det = self.n_drop = self.n_incons = self.n_nofloor = 0
         self.create_subscription(CameraInfo, 'thermal/camera_info', self._on_info, qos_profile_sensor_data)
         self.create_subscription(PointCloud2, 'lidar/points', self._on_cloud, qos_profile_sensor_data)
         self.create_subscription(Image, 'thermal/image_raw', self._on_image, qos_profile_sensor_data)
@@ -60,7 +61,8 @@ class ThermalDetector(Node):
         self.create_timer(30.0, self._stats)
 
     def _stats(self):
-        self.get_logger().info(f'кадров {self.n_img}, детекций {self.n_det}, отброшено {self.n_drop}, лидар не согласован с полом {self.n_incons}')
+        self.get_logger().info(f'кадров {self.n_img}, детекций {self.n_det}, отброшено {self.n_drop}, лидар не согласован с полом {self.n_incons}, '
+                               f'без касания пола {self.n_nofloor}')
 
     def _on_info(self, m):
         if self.K is None and m.k[0] > 0:
@@ -156,10 +158,20 @@ class ThermalDetector(Node):
             d.mean_temp_k = b['mean_k']
             d.max_temp_k = b['max_k']
             d.blob_px = int(b['px'])
-            d.height_m = li['height'] if li else NAN
+            # Низ пятна на горизонте или выше (g_rng None): тёплое видно только над препятствием
+            # (камера ~0.22 м, низкий обломок той же высоты). Точки лидара тогда принадлежат
+            # препятствию, их высота не высота тёплого объекта: форму не знаем (NaN), детекцию оставляем.
+            no_floor = (li is not None and g_rng is None and b['v1'] < h - 2
+                        and bool(self.g('floor_contact_height')))
+            if no_floor:
+                self.n_nofloor += 1
+            d.height_m = li['height'] if (li and not no_floor) else NAN
             ll = li['length'] if (li and li['n'] >= int(self.g('min_shape_pts'))) else 0.0
             d.length_m = float(max(ll, width))
             d.n_lidar_pts = li['n'] if li else 0
+            d.lidar_pad = li['pad'] if li else 255
+            d.blob_w_px = int(b['u1'] - b['u0'] + 1)
+            d.blob_h_px = int(b['v1'] - b['v0'] + 1)
             self.pub.publish(d)
             self.n_det += 1
 

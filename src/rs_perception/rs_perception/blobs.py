@@ -49,7 +49,7 @@ def lidar_on_blob(pts_t, blob, fx, fy, cx, cy, cluster_m, min_z, pts_z, offset_m
     j0, i0 = blob['off']
     h, w = blob['mask'].shape
     sel = None
-    for du, dv in ((0, 0), (1, 1), (2, 4)):
+    for lvl, (du, dv) in enumerate(((0, 0), (1, 1), (2, 4))):
         pad = np.pad(blob['mask'], ((dv, dv), (du, du)))
         if du or dv:
             pad = ndimage.binary_dilation(pad, structure=np.ones((2 * dv + 1, 2 * du + 1), dtype=bool))
@@ -61,6 +61,8 @@ def lidar_on_blob(pts_t, blob, fx, fy, cx, cy, cluster_m, min_z, pts_z, offset_m
         if s.any():
             sel = s
             break
+    else:
+        lvl = None
     if sel is None:
         return None
     p, z = p[sel], z[sel]
@@ -90,7 +92,7 @@ def lidar_on_blob(pts_t, blob, fx, fy, cx, cy, cluster_m, min_z, pts_z, offset_m
             n2 = np.array([-vec[1, 1], vec[0, 1]])
             nrm = n2 if n2 @ c > 0 else -n2
     pos = c + offset_m * nrm
-    return dict(depth=float(d0), pos=pos, height=float(z.max()), length=length, n=int(len(p)))
+    return dict(depth=float(d0), pos=pos, height=float(z.max()), length=length, n=int(len(p)), pad=lvl)
 
 
 def ground_range(blob, fx, fy, cx, cy, cam_z, max_range):
