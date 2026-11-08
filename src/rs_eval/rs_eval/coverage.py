@@ -39,6 +39,8 @@ class Coverage(Node):
         P('target', 0.95)
         P('max_time', 0.0)
         P('exit_on_done', True)
+        P('search_wait', False)   # не завершать по покрытию, пока есть открытые кандидаты-люди (Фаза 3)
+        P('search_hold', 3.0)     # сек. сим. времени "нет открытых кандидатов" подряд
         P('done_hold', 5.0)   # сек. сим. времени, которые все explorer должны держать done
         self.robots = list(self.get_parameter('robots').value)
         self.out_dir = self.get_parameter('out_dir').value
@@ -56,6 +58,9 @@ class Coverage(Node):
         self.trails = {r: [] for r in self.robots}
         self.done_since = None
         self.bids_done = {}
+        self.bids_open = {}    # robot -> (время, открытых кандидатов, отказов)
+        self.search_free_since = None
+        self.search_logged = False
         self.finished = False
         self.finish_reason = ''
         self.csv_path = os.path.join(self.out_dir, 'coverage.csv')
@@ -96,6 +101,7 @@ class Coverage(Node):
 
     def _on_bid(self, msg):
         self.bids_done[msg.robot_id] = (self._now(), msg.done)
+        self.bids_open[msg.robot_id] = (self._now(), int(msg.open_candidates), list(msg.gave_up))
 
     def _tick(self):
         if self.finished:
@@ -115,9 +121,25 @@ class Coverage(Node):
             self.done_since = self.done_since if self.done_since is not None else t
         else:
             self.done_since = None
-        if self.cov >= self.target:
+        search_ok = True
+        if self.get_parameter('search_wait').value:
+            fresh = [v for v in self.bids_open.values() if t - v[0] < 5.0]
+            n_open = max((v[1] for v in fresh), default=0)
+            if n_open == 0 and fresh:
+                self.search_free_since = self.search_free_since if self.search_free_since is not None else t
+            else:
+                self.search_free_since = None
+            search_ok = (self.search_free_since is not None
+                         and t - self.search_free_since >= float(self.get_parameter('search_hold').value))
+        if search_ok and (self.cov >= self.target or self.done_since is not None) and \
+                self.get_parameter('search_wait').value and not self.search_logged:
+            self.search_logged = True
+            gave = sorted({g for v in self.bids_open.values() for g in v[2]})
+            self.get_logger().info(f'SEARCH COMPLETE t={ts:.1f}: открытых кандидатов нет, оставлено: {gave or "нет"}')
+        if self.cov >= self.target and search_ok:
             self._finish(ts, f'покрытие {self.cov:.1%} >= {self.target:.0%}')
-        elif self.done_since is not None and t - self.done_since >= float(self.get_parameter('done_hold').value):
+        elif self.done_since is not None and search_ok and \
+                t - self.done_since >= float(self.get_parameter('done_hold').value):
             self._finish(ts, 'все explorer сообщили done')
         elif self.max_time > 0 and ts >= self.max_time:
             self._finish(ts, 'достигнут max_time')

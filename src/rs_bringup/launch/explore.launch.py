@@ -2,7 +2,7 @@
 
 Шаги: генератор мира (seed) -> Gazebo + роботы с истинной позой -> общая карта ->
 other_robots (роботы видят друг друга) -> Nav2 с collision_monitor на каждого -> explorer на каждого (аукцион) -> узел покрытия. Человек не нужен.
-Аргументы: seed, size, n, headless, rviz, out_dir, target_coverage, max_time (сим. с, 0 = без лимита).
+Аргументы: seed, size, n, headless, rviz, perception, out_dir, target_coverage, max_time (сим. с, 0 = без лимита).
 Результаты (мир, CSV, карта, график) лежат в out_dir.
 """
 import os
@@ -67,8 +67,17 @@ def launch_setup(context):
     cov = Node(package='rs_eval', executable='coverage', name='coverage', output='screen',
                parameters=[sim, {'mask_dir': world_dir, 'robots': robots, 'out_dir': out_dir,
                                  'target': float(arg('target_coverage')),
+                                 'search_wait': arg('perception').lower() == 'true',
                                  'max_time': float(arg('max_time'))}])
     actions.append(cov)
+    if arg('perception').lower() == 'true':
+        for r in robots:
+            actions.append(Node(
+                package='rs_perception', executable='thermal_detector', name='thermal_detector',
+                namespace=r, output='screen',
+                parameters=[sim, {'robot': r, 'debug_dir': os.path.join(out_dir, 'debug')}]))
+        actions.append(Node(package='rs_perception', executable='people_fusion', name='people_fusion',
+                            output='screen', parameters=[sim, {'out_dir': out_dir}]))
     # покрытие достигнуто / время вышло: гасим весь запуск
     actions.append(RegisterEventHandler(OnProcessExit(
         target_action=cov, on_exit=[EmitEvent(event=Shutdown(reason='exploration finished'))])))
@@ -84,6 +93,7 @@ def generate_launch_description():
         DeclareLaunchArgument('rviz', default_value='true'),
         DeclareLaunchArgument('out_dir', default_value='', description='по умолчанию /workspace/results/phase-2/run_seed_<seed>'),
         DeclareLaunchArgument('target_coverage', default_value='0.95'),
+        DeclareLaunchArgument('perception', default_value='true', description='тепловые детекторы и слияние отметок людей'),
         DeclareLaunchArgument('max_time', default_value='0', description='сим. секунды, 0 = без лимита'),
     ]
     return LaunchDescription(decl + [OpaqueFunction(function=launch_setup)])

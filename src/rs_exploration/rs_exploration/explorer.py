@@ -12,6 +12,13 @@
 меньшим номером просто ждёт. Неудача цели рядом с другим роботом (near_robot_dist) не заносит цель
 в чёрный список надолго: помеха была в роботе, а не в цели (только на temp_blacklist_ttl с).
 Все команды скорости (в т. ч. манёвры отсюда) идут в cmd_vel_nav -> collision_monitor -> cmd_vel.
+
+Осмотр кандидатов (Фаза 3): /people/inspect_requests -> каждый открытый кандидат-человек становится
+ставкой в том же аукционе с приоритетом над фронтирами (цена минус inspect_bonus, не больше одного
+робота на кандидата). Цель = свободная клетка в 1.0-2.0 м от кандидата с прямой видимостью на карте,
+курс на кандидата (rs_exploration/inspection.py). На месте: довернуть и постоять inspect_hold с, пока
+people_fusion не решит судьбу кандидата. Неудача -> счётчик; после inspect_max_fails кандидат оставлен
+(строка в логе, id уходит в gave_up ставок: так решают все роботы одинаково).
 """
 import math
 import time
@@ -28,10 +35,10 @@ from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from rs_interfaces.msg import ExplorationBid
+from rs_interfaces.msg import ExplorationBid, PersonMarkArray
 from visualization_msgs.msg import Marker, MarkerArray
 
-from rs_exploration import auction, frontier
+from rs_exploration import auction, frontier, inspection
 
 COLORS = {1: (1.0, 0.2, 0.2), 2: (0.2, 1.0, 0.3), 3: (0.3, 0.5, 1.0), 4: (1.0, 0.8, 0.1), 5: (0.9, 0.3, 1.0)}
 
@@ -71,6 +78,18 @@ class Explorer(Node):
         P('yield_hold', 8.0)          # после уступки новых целей не берём столько секунд
         P('yield_speed', 0.15)
         P('yield_time', 2.0)
+        P('inspect_bonus', 1000.0)    # приоритет осмотра над фронтирами (вычитается из цены)
+        P('inspect_r_min', 1.0)
+        P('inspect_r_max', 2.0)
+        P('inspect_r_pref', 1.5)
+        P('inspect_hold', 4.0)        # стоим на месте после прибытия, с
+        P('inspect_align_timeout', 6.0)
+        P('inspect_max_fails', 2)     # столько неудач осмотра -> кандидат оставлен
+        P('inspect_cooldown', 15.0)   # после неудачи этот робот столько секунд не берёт этого кандидата
+        P('inspect_bearing_pen', 4.0)  # штраф точке с той же стороны, откуда уже смотрели, м
+        P('inspect_max_bids', 4)
+        P('inspect_noreach_s', 60.0)   # кандидат без достижимой точки осмотра дольше этого -> оставлен (даже при фронтирах)
+        P('inspect_max_open_s', 300.0)  # кандидат открыт дольше этого (с первой заявки), не осматривается сейчас -> оставлен
         P('auction_delay', 0.3)       # аукцион через столько после публикации ставок: у всех свежая таблица
 
         self.me = self.get_parameter('robot_id').value
@@ -100,6 +119,20 @@ class Explorer(Node):
         self.blacklist = []  # (x, y, до_какого_времени, радиус)
         self.empty_cycles = 0
         self.done = False
+        # осмотр кандидатов
+        self.requests = {}       # id -> (x, y) открытые кандидаты от people_fusion
+        self.insp_fail = {}      # id -> число неудач этого робота
+        self.insp_block = {}     # id -> до какого времени этот робот не берёт кандидата
+        self.insp_bearings = {}  # id -> стороны, откуда уже смотрели
+        self.gave_local = set()
+        self.giveup = inspection.GiveUp(float(self.get_parameter('inspect_noreach_s').value),
+                                        float(self.get_parameter('inspect_max_open_s').value))
+        self.req_ignore = {}     # id -> заявки со штампом не позже этого времени устарели (осмотр закончен)
+        self.gave_all = set()
+        self.open_ids = []
+        self.goal_key = ''       # id кандидата, если текущая цель = осмотр
+        self.insp = None         # None | dict(state, t0, t_hold)
+        self.insp_att = 0
         self.trail = []
         self.prof = {}
         self.stats = dict(yielded=0, waited=0, temp_fail=0, unstick=0, sent=0, reached=0, failed=0, stuck=0, timeout=0, switched=0)
@@ -110,6 +143,7 @@ class Explorer(Node):
         self.create_subscription(Odometry, 'odom', self._on_odom, 10)
         self.create_subscription(PoseArray, '/fleet/poses', self._on_fleet, 5)
         self.create_subscription(ExplorationBid, '/exploration/bids', self._on_bid, 20)
+        self.create_subscription(PersonMarkArray, '/people/inspect_requests', self._on_requests, 5)
         self.bid_pub = self.create_publisher(ExplorationBid, '/exploration/bids', 20)
         self.mark_pub = self.create_publisher(MarkerArray, 'explorer/frontiers', 1)
         self.goal_pub = self.create_publisher(PoseStamped, 'explorer/goal', 1)
@@ -132,6 +166,7 @@ class Explorer(Node):
         self.create_timer(float(self.get_parameter('plan_period').value), self._cycle)
         self.create_timer(1.0, self._publish_trail)
         self.create_timer(0.5, self._yield_tick)
+        self.create_timer(0.1, self._inspect_tick)
         self.create_timer(30.0, self._log_prof)
         self.get_logger().info(f'explorer {self.me} запущен, область {self.region}')
 
@@ -227,6 +262,10 @@ class Explorer(Node):
 
         # проверка текущей цели
         self._check_goal(an, now)
+        self.gave_all = set(self.gave_local)
+        for _, msg in self.table.values():
+            self.gave_all.update(msg.gave_up)
+        self.open_ids = [k for k in self.requests if k not in self.gave_all]
 
         # кандидаты
         cands = []   # (cost, x, y, size)
@@ -254,10 +293,12 @@ class Explorer(Node):
                         x, y = self.goal
                     cands.append((float(np.float32(c)), x, y, float(sz[i])))
         cands.sort()
-        top = cands[:self.K]
+        top = [(c, x, y, sz, '') for c, x, y, sz in cands[:self.K]]
+        insp_bids = self._inspection_bids(an, data, now, no_frontiers=not cands)
+        top = insp_bids + top
 
         # состояние "готово"
-        if not cands and self.goal is None:
+        if not cands and self.goal is None and not self.open_ids:
             self.empty_cycles += 1
             if self.empty_cycles >= int(gp('done_cycles').value) and not self.done:
                 self.done = True
@@ -283,9 +324,11 @@ class Explorer(Node):
 
     def _auction(self):
         top, now = self.top, self._now()
-        table = {self.me: [(c, x, y) for c, x, y, _ in top]}
+        table = {self.me: [(c, x, y, k) for c, x, y, _, k in top]}
         for rid, (_, msg) in self.table.items():
-            table[rid] = [(float(c), p.x, p.y) for c, p in zip(msg.costs, msg.targets)]
+            ids = list(msg.target_ids) + [''] * len(msg.targets)
+            table[rid] = [(float(c), p.x, p.y, k) for c, p, k in zip(msg.costs, msg.targets, ids)]
+        self.my_keys = {(x, y): k for _, x, y, _, k in top}
         res = auction.assign(table, self.R)
         self.round += 1
         desc = ' '.join(f'{rid[-1]}->({x:.1f},{y:.1f})c{c:.1f}' for rid, (x, y, c) in sorted(res.items()))
@@ -300,6 +343,9 @@ class Explorer(Node):
         if self.goal is None:
             return
         gx, gy = self.goal
+        if self.goal_key:
+            self._check_inspect_goal(now)
+            return
         # цель больше не фронтир (уже исследована)?
         near = False
         if an.frontier.any():
@@ -327,7 +373,8 @@ class Explorer(Node):
         if mine is None:
             return   # нет назначения: продолжаем текущую цель, иначе ждём
         x, y, _ = mine
-        if self.goal is not None and math.hypot(x - self.goal[0], y - self.goal[1]) < 1.0:
+        key = getattr(self, 'my_keys', {}).get((x, y), '')
+        if self.goal is not None and key == self.goal_key and math.hypot(x - self.goal[0], y - self.goal[1]) < 1.0:
             return   # то же самое
         if self.unsticking or now < self.hold_until:
             return
@@ -340,12 +387,22 @@ class Explorer(Node):
             return
         if self.goal is not None:
             self.stats['switched'] += 1
-        self._send_goal(x, y)
+        self._send_goal(x, y, key)
 
     # --- роботы друг с другом -------------------------------------------------
     def _fail_goal(self, x, y, why):
         """Неудача цели. Рядом другой робот: виноват он, цель блокируем ненадолго и без снятия с мели."""
         d, rid, _ = self._nearest_other()
+        if self.goal_key:
+            key = self.goal_key
+            if d < float(self.get_parameter('near_robot_dist').value):
+                self.stats['temp_fail'] += 1
+                self.insp_block[key] = self._now() + float(self.get_parameter('temp_blacklist_ttl').value)
+                self.get_logger().warn(f'осмотр {key}: {why}, рядом {rid} в {d:.1f} м: временно')
+            else:
+                self._inspect_fail(key, why)
+                self._note_failure()
+            return
         if d < float(self.get_parameter('near_robot_dist').value):
             self.stats['temp_fail'] += 1
             self._add_blacklist(x, y, f'{why}, рядом {rid} в {d:.1f} м: временно',
@@ -372,7 +429,10 @@ class Explorer(Node):
             self.stats['yielded'] += 1
             gx, gy = self.goal
             self.get_logger().warn(f'заблокирован роботом {rid} ({d:.1f} м): уступаю, цель ({gx:.1f}, {gy:.1f}) на паузу')
-            self.blacklist.append((gx, gy, now + float(gp('temp_blacklist_ttl').value), float(gp('blacklist_radius').value)))
+            if self.goal_key:
+                self.insp_block[self.goal_key] = now + float(gp('temp_blacklist_ttl').value)
+            else:
+                self.blacklist.append((gx, gy, now + float(gp('temp_blacklist_ttl').value), float(gp('blacklist_radius').value)))
             self._cancel_goal()
             self._flush_cancel()
             self.hold_until = now + float(gp('yield_hold').value)
@@ -403,6 +463,162 @@ class Explorer(Node):
             self.unsticking = False
             self.get_logger().info(f'{label}: закончено')
         holder.append(self.create_timer(0.1, tick))
+
+    # --- осмотр кандидатов -----------------------------------------------------
+    def _on_requests(self, msg):
+        st = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self.requests = {m.id: (m.position.x, m.position.y) for m in msg.marks
+                         if st > self.req_ignore.get(m.id, -1.0)}
+
+    def _inspection_bids(self, an, data, now, no_frontiers):
+        """Ставки на осмотр открытых кандидатов: [(цена - бонус, x, y, 0, id)], лучшая точка на кандидата."""
+        gp = self.get_parameter
+        rx, ry = self.pose
+        pts = []   # (id, x, y, bearing, штраф)
+        by_id = {}
+        for key in self.open_ids:
+            if now < self.insp_block.get(key, 0.0):
+                continue
+            cx, cy = self.requests[key]
+            sp = inspection.standing_points(
+                an, data, cx, cy, r_min=float(gp('inspect_r_min').value), r_max=float(gp('inspect_r_max').value),
+                r_pref=float(gp('inspect_r_pref').value))
+            if self.goal_key == key and self.goal is not None:
+                gx, gy = self.goal
+                sp.append((gx, gy, math.atan2(cy - gy, cx - gx), math.atan2(gy - cy, gx - cx), -float(gp('hysteresis').value)))
+            used = self.insp_bearings.get(key, [])
+            pen = float(gp('inspect_bearing_pen').value)
+            for s in sp:
+                extra = s[4] if len(s) > 4 else 0.0
+                if any(inspection.angle_diff(s[3], b) < 0.9 for b in used):
+                    extra += pen
+                pts.append((key, s[0], s[1], extra))
+            by_id[key] = len(sp)
+        out = []
+        if pts:
+            pl = frontier.path_costs(an, rx, ry, [p[1] for p in pts], [p[2] for p in pts])
+            best = {}
+            for (key, x, y, extra), l in zip(pts, pl):
+                if not np.isfinite(l):
+                    continue
+                c = l + extra
+                if key not in best or c < best[key][0]:
+                    best[key] = (c, x, y)
+            bonus = float(gp('inspect_bonus').value)
+            out = [(float(np.float32(c - bonus)), x, y, 0.0, key) for key, (c, x, y) in best.items()]
+            out.sort()
+            out = out[:int(gp('inspect_max_bids').value)]
+            reachable = set(best)
+        else:
+            reachable = set()
+        # нет точки осмотра, а исследовать больше нечего: считаем неудачей (иначе отказались бы зря рано)
+        if no_frontiers:
+            for key in self.open_ids:
+                if key not in reachable and now >= self.insp_block.get(key, 0.0) and key != self.goal_key:
+                    self._inspect_fail(key, 'нет достижимой точки осмотра', cooldown=5.0)
+        # фронтиры ещё есть, но к кандидату никто не может подъехать (человек за дверью, за стеной):
+        # ограниченное ожидание, иначе завершение ждёт его вечно
+        blocked = {k for k in self.open_ids if now < self.insp_block.get(k, 0.0)}
+        for key, why in self.giveup.update(now, self.open_ids, reachable, self.goal_key, blocked):
+            self._inspect_giveup(key, why)
+        self.open_ids = [k for k in self.open_ids if k not in self.gave_local]
+        return out
+
+    def _inspect_giveup(self, key, why):
+        if key not in self.gave_local:
+            self.gave_local.add(key)
+            self.get_logger().warn(f'кандидат {key} оставлен: {why}')
+
+    def _inspect_fail(self, key, why, cooldown=None):
+        gp = self.get_parameter
+        now = self._now()
+        n = self.insp_fail.get(key, 0) + 1
+        self.insp_fail[key] = n
+        self.insp_block[key] = now + (float(gp('inspect_cooldown').value) if cooldown is None else cooldown)
+        self.get_logger().warn(f'осмотр {key} не удался ({why}), неудач {n}/{int(gp("inspect_max_fails").value)}')
+        if n >= int(gp('inspect_max_fails').value) and key not in self.gave_local:
+            self.gave_local.add(key)
+            self.get_logger().warn(f'кандидат {key} оставлен после {n} неудач осмотра')
+
+    def _check_inspect_goal(self, now):
+        key = self.goal_key
+        gx, gy = self.goal
+        gp = self.get_parameter
+        if key not in self.requests or key in self.gave_all:
+            self.get_logger().info(f'осмотр {key}: кандидат решён или оставлен, отмена цели')
+            self._cancel_goal()
+            return
+        if self.insp is not None:
+            return   # на месте: ведёт _inspect_tick
+        if now - self.goal_t0 > float(gp('goal_timeout').value):
+            self.stats['timeout'] += 1
+            self._cancel_goal()
+            self.goal_key = key
+            self._fail_goal(gx, gy, 'тайм-аут цели')
+            self.goal_key = ''
+            return
+        t, px, py = self.progress
+        if math.hypot(self.pose[0] - px, self.pose[1] - py) > float(gp('stuck_dist').value):
+            self.progress = (now, self.pose[0], self.pose[1])
+        elif now - t > float(gp('stuck_time').value):
+            self.stats['stuck'] += 1
+            self._cancel_goal()
+            self.goal_key = key
+            self._fail_goal(gx, gy, 'застрял')
+            self.goal_key = ''
+
+    def _start_inspect_hold(self):
+        now = self._now()
+        key = self.goal_key
+        self.insp = dict(state='align', t0=now, t_hold=None)
+        self.last_move_t = now
+        cx, cy = self.requests.get(key, self.goal)
+        self.insp_bearings.setdefault(key, []).append(math.atan2(self.pose[1] - cy, self.pose[0] - cx))
+        self.get_logger().info(f'осмотр {key}: на месте, доворот и выдержка')
+
+    def _inspect_tick(self):
+        """На месте осмотра: довернуть на кандидата, постоять; если кандидат решён - сразу дальше."""
+        if self.insp is None:
+            return
+        gp = self.get_parameter
+        now = self._now()
+        key = self.goal_key
+        if self.goal is None or not key:
+            self.insp = None
+            return
+        if key not in self.requests or key in self.gave_all:
+            self.get_logger().info(f'осмотр {key}: кандидат решён во время осмотра')
+            self.insp_fail.pop(key, None)
+            self._finish_inspect()
+            return
+        cx, cy = self.requests[key]
+        err = (math.atan2(cy - self.pose[1], cx - self.pose[0]) - self.yaw + math.pi) % (2 * math.pi) - math.pi
+        self.last_move_t = now   # стоим намеренно: правило "заблокирован" не срабатывает
+        st = self.insp
+        if st['state'] == 'align':
+            if abs(err) < 0.12 or now - st['t0'] > float(gp('inspect_align_timeout').value):
+                st['state'], st['t_hold'] = 'hold', now
+                self.cmd_pub.publish(Twist())
+            else:
+                msg = Twist()
+                msg.angular.z = float(np.clip(1.5 * err, -0.6, 0.6))
+                self.cmd_pub.publish(msg)
+        elif now - st['t_hold'] > float(gp('inspect_hold').value):
+            self._inspect_fail(key, 'после выдержки кандидат не решён')
+            self._finish_inspect()
+
+    def _finish_inspect(self):
+        key = self.goal_key
+        if key:
+            # заявка могла устареть в пути: снимаем и не принимаем более старые сообщения
+            self.requests.pop(key, None)
+            self.req_ignore[key] = self._now()
+        self.insp = None
+        self.cmd_pub.publish(Twist())
+        self.goal = None
+        self.goal_key = ''
+        self.goal_handle = None
+        self.goal_id += 1
 
     # --- Nav2 ---------------------------------------------------------------
     def _reset_streak(self):
@@ -474,8 +690,9 @@ class Explorer(Node):
                 self.get_logger().info('Nav2 активен, начинаем исследование')
         fut.add_done_callback(done)
 
-    def _send_goal(self, x, y):
+    def _send_goal(self, x, y, key=''):
         self.goal_id += 1
+        self.insp = None
         gid = self.goal_id
         g = NavigateToPose.Goal()
         g.pose.header.frame_id = 'world'
@@ -483,6 +700,9 @@ class Explorer(Node):
         g.pose.pose.position.x = x
         g.pose.pose.position.y = y
         yaw = math.atan2(y - self.pose[1], x - self.pose[0])
+        if key and key in self.requests:
+            yaw = math.atan2(self.requests[key][1] - y, self.requests[key][0] - x)
+        self.goal_key = key
         g.pose.pose.orientation.z = math.sin(yaw / 2)
         g.pose.pose.orientation.w = math.cos(yaw / 2)
         self.stale_handle = None   # новая цель вытеснит старую в Nav2
@@ -493,7 +713,8 @@ class Explorer(Node):
         self.last_move_t = self.goal_t0
         self.stats['sent'] += 1
         self.goal_pub.publish(g.pose)
-        self.get_logger().info(f'цель #{gid}: ({x:.1f}, {y:.1f})')
+        what = f' осмотр {key}' if key else ''
+        self.get_logger().info(f'цель #{gid}: ({x:.1f}, {y:.1f}){what}')
         fut = self.nav.send_goal_async(g)
         fut.add_done_callback(lambda f, gid=gid: self._on_accept(f, gid))
 
@@ -505,8 +726,12 @@ class Explorer(Node):
             return
         if not gh.accepted:
             self.stats['failed'] += 1
-            self._add_blacklist(*self.goal, 'Nav2 отклонил цель')
+            if self.goal_key:
+                self._inspect_fail(self.goal_key, 'Nav2 отклонил цель')
+            else:
+                self._add_blacklist(*self.goal, 'Nav2 отклонил цель')
             self.goal = None
+            self.goal_key = ''
             return
         self.goal_handle = gh
         gh.get_result_async().add_done_callback(lambda f, gid=gid: self._on_result(f, gid))
@@ -519,14 +744,18 @@ class Explorer(Node):
         if status == GoalStatus.STATUS_SUCCEEDED:
             self.stats['reached'] += 1
             self.get_logger().info(f'цель #{gid} достигнута')
+            self._reset_streak()
+            if self.goal_key:
+                self._start_inspect_hold()
+                return   # цель остаётся активной до конца осмотра
             # если фронтир на месте остался, он бесполезен: исключаем
             self.blacklist.append((gx, gy, self._now() + float(self.get_parameter('blacklist_ttl').value),
                                    float(self.get_parameter('blacklist_radius').value)))
-            self._reset_streak()
         else:
             self.stats['failed'] += 1
             self._fail_goal(gx, gy, f'Nav2 статус {status}')
         self.goal = None
+        self.goal_key = ''
         self.goal_handle = None
 
     def _cancel_goal(self):
@@ -535,6 +764,8 @@ class Explorer(Node):
         if self.goal_handle is not None:
             self.stale_handle = self.goal_handle
         self.goal = None
+        self.goal_key = ''
+        self.insp = None
         self.goal_handle = None
         self.goal_id += 1   # результат отменённой цели игнорируем
 
@@ -554,8 +785,11 @@ class Explorer(Node):
         msg.has_goal = self.goal is not None
         if self.goal:
             msg.current_goal = Point(x=self.goal[0], y=self.goal[1])
-        msg.targets = [Point(x=x, y=y) for _, x, y, _ in top]
+        msg.targets = [Point(x=x, y=y) for _, x, y, _, _ in top]
         msg.costs = [c for c, *_ in top]
+        msg.target_ids = [k for *_, k in top]
+        msg.open_candidates = len(self.open_ids)
+        msg.gave_up = sorted(self.gave_local)
         msg.done = self.done
         self.bid_pub.publish(msg)
 

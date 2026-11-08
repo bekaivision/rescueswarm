@@ -17,7 +17,7 @@ import yaml
 from PIL import Image, ImageDraw
 from scipy import ndimage
 
-GENERATOR_VERSION = '1.1'
+GENERATOR_VERSION = '1.2'
 WORLD_NAME = 'rescue'
 RES = 0.05            # размер клетки карты, м
 ROBOT_RADIUS = 0.30   # радиус диска робота для проходимости, м
@@ -27,6 +27,15 @@ MASK_OUTSIDE = 0.0    # маска покрытия: только внутрен
 MASK_EXTRA = 0.5      # расширение маски поверх радиуса робота
 ENTRANCE_W = 1.6
 PERSON_SIZE = (1.7, 0.45, 0.25)
+PERSON_TEMP_K = 310.0
+# ложные цели: тип -> (температура K, размер (длина, ширина, высота) м, форма)
+DECOY_TYPES = {
+    'fire': dict(temp_k=600.0, size=(0.4, 0.4, 0.3), shape='cylinder', color=(0.95, 0.45, 0.05)),
+    'radiator': dict(temp_k=335.0, size=(0.8, 0.12, 0.6), shape='box', color=(0.85, 0.85, 0.85)),
+    'warm_debris': dict(temp_k=309.0, size=(0.7, 0.7, 0.55), shape='box', color=(0.40, 0.33, 0.28)),
+}
+DECOY_COUNT = {'medium': (3, 6), 'small': (3, 4)}
+PEOPLE_DECOY_GAP = 2.0   # минимум между человеком/ложной целью и другими, м
 MIN_REACH_FRACTION = 0.70
 
 SIZES = {
@@ -315,6 +324,61 @@ def place_people(rng, lay, g, occ, an, rooms_reach):
     return people
 
 
+def place_decoys(rng, lay, g, occ, rooms_reach, people):
+    """Ложные цели (fire, radiator, warm_debris), минимум одна warm_debris.
+    Те же зазоры, что у людей; не в узких проходах; >= PEOPLE_DECOY_GAP от людей и друг от друга."""
+    n = rng.randint(*DECOY_COUNT[lay['size']])
+    types = ['warm_debris'] + [rng.choice(sorted(DECOY_TYPES)) for _ in range(n - 1)]
+    rooms = [lay['rooms'][i]['rect'] for i, ok in enumerate(rooms_reach) if ok]
+    rooms += [lay['corridor']]
+    H = lay['H']
+    decoys = []
+    for typ in types:
+        spec = DECOY_TYPES[typ]
+        dl, dw, dh = spec['size']
+        for _try in range(400):
+            r = rng.choice(rooms)
+            yaw = rng.uniform(-math.pi, math.pi)
+            if typ == 'radiator':
+                side = rng.randrange(4)
+                gap = dw / 2.0 + 0.03
+                if side < 2:   # у южной/северной стены
+                    cx = rng.uniform(r[0] + 0.8, r[2] - 0.8)
+                    cy = r[1] + gap if side == 0 else r[3] - gap
+                    yaw = 0.0
+                else:
+                    cy = rng.uniform(r[1] + 0.8, r[3] - 0.8)
+                    cx = r[0] + gap if side == 2 else r[2] - gap
+                    yaw = math.pi / 2.0
+            else:
+                cx = rng.uniform(r[0] + 0.6, r[2] - 0.6)
+                cy = rng.uniform(r[1] + 0.6, r[3] - 0.6)
+            circ = typ == 'fire'
+            if cy < -H / 2.0 + 2.5 and r is lay['corridor']:
+                continue    # зона входа остаётся чистой
+            if any(d['cx'] - 1.0 < cx < d['cx'] + 1.0 and d['cy'] - 1.0 < cy < d['cy'] + 1.0
+                   for d in lay['doors']):
+                continue
+            if any(z[0] - 0.8 < cx < z[2] + 0.8 and z[1] - 0.8 < cy < z[3] + 0.8 for z in lay['narrow']):
+                continue
+            if typ == 'radiator':
+                # у стены: сама стена рядом, зазор 0.35 м только к завалу/людям/другим целям
+                if g.hits(occ, cx, cy, dl + 0.3, dw, yaw):
+                    continue
+            elif g.hits(occ, cx, cy, dl + 0.7, dw + 0.7, yaw, circle=circ):
+                continue
+            if any(math.hypot(cx - q['x'], cy - q['y']) < PEOPLE_DECOY_GAP for q in people):
+                continue
+            if any(math.hypot(cx - q['x'], cy - q['y']) < PEOPLE_DECOY_GAP for q in decoys):
+                continue
+            decoys.append(dict(type=typ, x=cx, y=cy, yaw=yaw, temp_k=spec['temp_k'], size=spec['size'],
+                               shape=spec['shape'], color=spec['color']))
+            break
+        else:
+            return None
+    return decoys
+
+
 def _try_build(rng, size, seed):
     lay = make_layout(rng, size)
     W, H, t, xs = lay['W'], lay['H'], lay['t'], lay['xs']
@@ -348,7 +412,15 @@ def _try_build(rng, size, seed):
     people_occ = g.empty()
     for p in people:
         g.stamp(people_occ, p['x'], p['y'], PERSON_SIZE[0], PERSON_SIZE[1], p['yaw'])
-    occ = occ0 | people_occ
+    # ложные цели ставятся после людей, чтобы раскладка людей не менялась
+    decoys = place_decoys(rng, lay, g, occ0 | people_occ, rooms_reach, people)
+    if decoys is None:
+        return None
+    decoy_occ = g.empty()
+    for d in decoys:
+        g.stamp(decoy_occ, d['x'], d['y'], d['size'][0], d['size'][1], d['yaw'],
+                circle=(d['shape'] == 'cylinder'))
+    occ = occ0 | people_occ | decoy_occ
     an = analyze(g, occ, spawn, limit)
     if an is None:
         return None
@@ -361,7 +433,7 @@ def _try_build(rng, size, seed):
     if int_reach < MIN_REACH_FRACTION * int_free:
         return None
     return dict(seed=seed, size=size, lay=lay, grid=g, limit=limit, wall_occ=wall_occ,
-                rubble_occ=rubble_occ, people_occ=people_occ, occ=occ, an=an,
+                rubble_occ=rubble_occ, people_occ=people_occ, decoy_occ=decoy_occ, decoys=decoys, occ=occ, an=an,
                 rubble=rubble, people=people, spawn=spawn, interior=interior,
                 int_free=int_free, int_reach=int_reach)
 
@@ -446,12 +518,22 @@ def ground_truth(w):
             near = bool((an['reach'][j0:j1 + 1, i0:i1 + 1] & m).any())
         people.append(dict(id=f'person_{k}', x=_r(p['x']), y=_r(p['y']), yaw=_r(p['yaw']),
                            zone_id=room_zone[p['room']], reachable=near))
+    decoys = []
+    for k, d in enumerate(w['decoys'], 1):
+        zone = next((z['id'] for z in zones if z['type'] in ('room', 'dead_end', 'corridor')
+                     and z['rect'][0] <= d['x'] <= z['rect'][2] and z['rect'][1] <= d['y'] <= z['rect'][3]),
+                    'unknown')
+        j0, j1, i0, i1, m = g.shape_mask(d['x'], d['y'], d['size'][0] + 1.3, d['size'][1] + 1.3, d['yaw'])
+        near = bool((an['reach'][j0:j1 + 1, i0:i1 + 1] & m).any()) if j1 >= j0 else False
+        decoys.append(dict(id=f'decoy_{k}', type=d['type'], x=_r(d['x']), y=_r(d['y']), yaw=_r(d['yaw']),
+                           temp_k=d['temp_k'], size=[_r(v) for v in d['size']], zone_id=zone,
+                           reachable=near))
     W, H = lay['W'], lay['H']
     cell = RES * RES
     stats = dict(rooms=sum(1 for z in zones if z['type'] == 'room'),
                  dead_ends=sum(1 for z in zones if z['type'] == 'dead_end'),
                  narrow_passages=sum(1 for z in zones if z['type'] == 'narrow_passage'),
-                 rubble=len(w['rubble']), people=len(people),
+                 rubble=len(w['rubble']), people=len(people), decoys=len(decoys),
                  interior_free_area_m2=_r(w['int_free'] * cell),
                  reachable_area_m2=_r(w['int_reach'] * cell),
                  reachable_fraction=_r(w['int_reach'] / w['int_free']),
@@ -464,7 +546,7 @@ def ground_truth(w):
                       wall_thickness=_r(lay['t']), wall_height=WALL_H),
         map=dict(resolution=RES, free_value=254, occupied_value=0),
         robot_radius=ROBOT_RADIUS, stats=stats, zones=zones, obstacles=obstacles,
-        people=people,
+        people=people, decoys=decoys,
         spawn_poses=[dict(x=_r(s['x']), y=_r(s['y']), yaw=_r(s['yaw'])) for s in w['spawn']],
     )
 
@@ -555,7 +637,26 @@ def world_sdf(w):
         a(f'        <collision name="c">{geo}</collision>')
         a(f'        <visual name="v">{geo}{_mat((0.87, 0.68, 0.55))}')
         a('          <plugin filename="gz-sim-thermal-system" name="gz::sim::systems::Thermal">')
-        a('            <temperature>310.0</temperature>')
+        a('            <temperature>%.1f</temperature>' % PERSON_TEMP_K)
+        a('          </plugin>')
+        a('        </visual>')
+        a('      </link>')
+        a('    </model>')
+    for k, d in enumerate(w['decoys'], 1):
+        dl, dw, dh = d['size']
+        if d['shape'] == 'box':
+            geo = f'<geometry><box><size>{f4(dl)} {f4(dw)} {f4(dh)}</size></box></geometry>'
+        else:
+            geo = (f'<geometry><cylinder><radius>{f4(dl / 2.0)}</radius>'
+                   f'<length>{f4(dh)}</length></cylinder></geometry>')
+        a(f'    <model name="decoy_{k}_{d["type"]}">')
+        a('      <static>true</static>')
+        a(f'      <pose>{f4(d["x"])} {f4(d["y"])} {f4(dh / 2.0)} 0 0 {f4(d["yaw"])}</pose>')
+        a('      <link name="link">')
+        a(f'        <collision name="c">{geo}</collision>')
+        a(f'        <visual name="v">{geo}{_mat(d["color"])}')
+        a('          <plugin filename="gz-sim-thermal-system" name="gz::sim::systems::Thermal">')
+        a(f'            <temperature>{d["temp_k"]:.1f}</temperature>')
         a('          </plugin>')
         a('        </visual>')
         a('      </link>')
@@ -589,6 +690,7 @@ def preview_image(w, width=800):
     img[w['wall_occ']] = (70, 70, 85)
     img[w['rubble_occ']] = (125, 75, 35)
     img[w['people_occ']] = (230, 160, 140)
+    img[w['decoy_occ']] = (240, 150, 40)
     im = Image.fromarray(img[::-1].astype(np.uint8))
     k = width / (g.xmax - g.xmin)
     im = im.resize((width, int(round((g.ymax - g.ymin) * k))), Image.NEAREST)
@@ -604,6 +706,9 @@ def preview_image(w, width=800):
     for p in w['people']:
         x, y = px(p['x'], p['y'])
         d.ellipse([x - 5, y - 5, x + 5, y + 5], fill=(220, 0, 0))
+    for q in w['decoys']:
+        x, y = px(q['x'], q['y'])
+        d.rectangle([x - 5, y - 5, x + 5, y + 5], fill=(255, 140, 0))
     for s in w['spawn']:
         x, y = px(s['x'], s['y'])
         d.ellipse([x - 6, y - 6, x + 6, y + 6], outline=(0, 0, 220), width=2)

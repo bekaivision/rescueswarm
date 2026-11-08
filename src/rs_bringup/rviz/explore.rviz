@@ -16,6 +16,17 @@ Visualization Manager:
     Draw Behind: true
     Use Timestamp: false
   - Class: rviz_default_plugins/MarkerArray
+    Name: people marks
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /people/markers
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Namespaces: {}
+  - Class: rviz_default_plugins/MarkerArray
     Name: ground_1 frontiers
     Enabled: true
     Value: true

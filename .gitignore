@@ -18,3 +18,4 @@ __pycache__/
 
 # Local environment
 .env
+.pytest_cache/

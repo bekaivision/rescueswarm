@@ -29,5 +29,6 @@
   <exec_depend>rs_mapping</exec_depend>
   <exec_depend>rs_exploration</exec_depend>
   <exec_depend>rs_eval</exec_depend>
+  <exec_depend>rs_perception</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

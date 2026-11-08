@@ -94,3 +94,14 @@ def test_gt_map_matches_obstacles(tmp_path):
     arr = np.frombuffer(rest, dtype=np.uint8).reshape(h, wd)
     assert set(np.unique(arr)) <= {0, 254}
     assert (arr == 0).sum() > 0
+
+
+@pytest.mark.parametrize('seed', range(1, 21))
+def test_decoys(seed):
+    w = G.build_world(seed, 'medium')
+    gt = G.ground_truth(w)
+    assert 3 <= len(gt['decoys']) <= 6
+    assert any(d['type'] == 'warm_debris' for d in gt['decoys'])
+    for d in gt['decoys']:
+        for p in gt['people']:
+            assert ((d['x'] - p['x']) ** 2 + (d['y'] - p['y']) ** 2) ** 0.5 >= G.PEOPLE_DECOY_GAP
