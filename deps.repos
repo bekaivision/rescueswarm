@@ -1,1 +1,26 @@
-repositories: {}
+# Внешние зависимости, закреплены по хэшу коммита (не по ветке).
+# make deps кладёт их в external/ (в git не попадает).
+repositories:
+  # Фаза 4 (проверка): мульти-робот графовый SLAM, https://github.com/aserbremen/Multi-Robot-Graph-SLAM
+  # mrg_slam_sim не берём: симулятор у нас свой.
+  mrg_slam:
+    type: git
+    url: https://github.com/aserbremen/mrg_slam
+    version: c614d636746e4bc6075147ff2c42c77e151137b2   # main, 2025-10-01
+  mrg_slam_msgs:
+    type: git
+    url: https://github.com/aserbremen/mrg_slam_msgs
+    version: 232287e7d2ff813b9d4fe33fa8fa69b19bb7930a   # main
+  small_gicp:
+    type: git
+    url: https://github.com/koide3/small_gicp.git
+    version: fa0cfc983417c044b6036f71dfa448038bb9c820   # master
+  fast_gicp:
+    type: git
+    url: https://github.com/SMRT-AIST/fast_gicp
+    version: 0e7ec1441c99f7be453db2ea216d5de029387417   # master
+  ndt_omp:
+    # форк aserbremen (поддержка arm64)
+    type: git
+    url: https://github.com/aserbremen/ndt_omp
+    version: 8cc0e47d1691a7056755cdcc89ebf6fa91d93d02   # master

@@ -41,7 +41,7 @@ class OtherRobots(Node):
         self.poses = {}     # robot -> (x, y, yaw)
         self.stamps = {}    # robot -> stamp последней одометрии
         for r in self.robots:
-            self.create_subscription(Odometry, f'/{r}/odom', lambda m, r=r: self._on_odom(r, m),
+            self.create_subscription(Odometry, f'/{r}/pose', lambda m, r=r: self._on_odom(r, m),
                                      qos_profile_sensor_data)
         self.pubs = {r: self.create_publisher(LaserScan, f'/{r}/other_robots_scan', 5) for r in self.robots}
         self.poses_pub = self.create_publisher(PoseArray, '/fleet/poses', 5)

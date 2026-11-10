@@ -2,7 +2,13 @@
 
 У каждого робота: свой robot_state_publisher (namespace + frame_prefix), свой
 ros_gz_bridge, статический TF world -> ground_i/odom по позе старта.
-Аргументы: n, headless, rviz, rviz_config, world, spacing, poses, gt_pose, а также частоты и разрешения сенсоров.
+Аргументы: n, headless, rviz, rviz_config, world, spacing, poses, gt_pose, localization, static_world_odom,
+а также частоты и разрешения сенсоров.
+localization: '' (по умолчанию, как раньше: решает gt_pose), 'gt' (= gt_pose true: /odom и TF истинные,
+статический world -> odom единичный), 'slam' (/odom и TF odom -> base_link от колёс; статический
+world -> odom по умолчанию НЕ запускается: его публикует SLAM-адаптер).
+static_world_odom: '' (авто: запускать, кроме localization=slam), 'true' / 'false' - принудительно.
+Истинная поза в /<robot>/gt_odom есть всегда (без TF).
 """
 import os
 
@@ -17,7 +23,7 @@ SENSOR_ARGS = {
     'lidar_rate': '10', 'lidar_samples': '360', 'lidar_beams': '16',
     'rgb_rate': '5', 'rgb_width': '320', 'rgb_height': '240',
     'thermal_rate': '5', 'thermal_width': '160', 'thermal_height': '120',
-    'imu_rate': '50',
+    'imu_rate': '50', 'imu_noise': 'true',
 }
 
 
@@ -26,6 +32,7 @@ def bridge_args(ns):
     return [
         f'/{ns}/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
         f'/{ns}/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+        f'/{ns}/gt_odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
         f'/{ns}/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
         f'/{ns}/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model',
         f'/{ns}/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
@@ -44,6 +51,15 @@ def launch_setup(context):
     spacing = float(LaunchConfiguration('spacing').perform(context))
     world = LaunchConfiguration('world').perform(context)
     gt_pose = LaunchConfiguration('gt_pose').perform(context).lower() == 'true'
+    loc = LaunchConfiguration('localization').perform(context).strip().lower()
+    if loc not in ('', 'gt', 'slam'):
+        raise RuntimeError(f"localization: '{loc}', нужно gt или slam")
+    if loc == 'gt':
+        gt_pose = True
+    elif loc == 'slam':
+        gt_pose = False
+    swo = LaunchConfiguration('static_world_odom').perform(context).strip().lower()
+    static_world_odom = (swo == 'true') if swo else loc != 'slam'
     poses_arg = LaunchConfiguration('poses').perform(context).strip()
     rviz_config = LaunchConfiguration('rviz_config').perform(context)
     if not rviz_config:
@@ -97,11 +113,12 @@ def launch_setup(context):
             package='ros_gz_bridge', executable='parameter_bridge', name=f'{ns}_bridge',
             arguments=bridge_args(ns), output='screen', parameters=[sim_time],
             remappings=[(f'/{ns}/tf', '/tf')]))
-        actions.append(Node(
-            package='tf2_ros', executable='static_transform_publisher',
-            name=f'{ns}_world_tf', output='log', parameters=[sim_time],
-            arguments=['--x', str(tx), '--y', str(ty), '--z', '0', '--yaw', str(tyaw),
-                       '--frame-id', 'world', '--child-frame-id', f'{ns}/odom']))
+        if static_world_odom:
+            actions.append(Node(
+                package='tf2_ros', executable='static_transform_publisher',
+                name=f'{ns}_world_tf', output='log', parameters=[sim_time],
+                arguments=['--x', str(tx), '--y', str(ty), '--z', '0', '--yaw', str(tyaw),
+                           '--frame-id', 'world', '--child-frame-id', f'{ns}/odom']))
 
     if use_rviz:
         actions.append(Node(
@@ -118,6 +135,8 @@ def generate_launch_description():
         DeclareLaunchArgument('world', default_value='', description='путь к SDF (по умолчанию phase1.sdf)'),
         DeclareLaunchArgument('spacing', default_value='2.0', description='расстояние между роботами по y, м'),
         DeclareLaunchArgument('gt_pose', default_value='false', description='истинная поза из Gazebo вместо одометрии колёс'),
+        DeclareLaunchArgument('localization', default_value='', description="'' (как раньше, по gt_pose), 'gt' или 'slam'"),
+        DeclareLaunchArgument('static_world_odom', default_value='', description="'' (авто), 'true' или 'false': статический TF world -> odom"),
         DeclareLaunchArgument('poses', default_value='', description='"x,y,yaw;x,y,yaw;..." (пусто: ряд по y с шагом spacing)'),
         DeclareLaunchArgument('rviz_config', default_value='', description='путь к .rviz (по умолчанию robots.rviz)'),
     ]

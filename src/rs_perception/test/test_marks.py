@@ -22,6 +22,21 @@ def test_hot_rejected():
     assert feed(M.Fusion(), 3, temp=335.0).status == M.REJECTED
 
 
+def test_single_hot_outlier_does_not_reject_person():
+    # 7 замеров человека (311 K) и один замер огня (599 K): среднее выше 320 K, медиана 311 K
+    f = M.Fusion()
+    feed(f, 7, temp=311.0, rng=4.0)
+    m, _ = f.update(1.0, 2.0, 'r1', 4.0, 599.0, 0.2, 1.5, 8.0)
+    assert m.status != M.REJECTED
+
+
+def test_mostly_hot_rejected_with_cold_outlier():
+    f = M.Fusion()
+    feed(f, 5, temp=599.0, rng=4.0)
+    m, _ = f.update(1.0, 2.0, 'r1', 4.0, 311.0, 0.2, 1.5, 6.0)
+    assert m.status == M.REJECTED and m.reason == 'too_hot'
+
+
 def test_tall_debris_rejected():
     assert feed(M.Fusion(), 3, temp=309.0, h=0.5, ln=0.7).status == M.REJECTED
 
@@ -91,3 +106,53 @@ def test_body_merge_skips_rejected_and_tall():
     feed(f, 3, x=0.0, temp=309.0, h=0.5, ln=0.7)   # REJECTED (высокая ловушка)
     feed(f, 3, x=1.5, temp=309.0, h=0.2)
     assert len(f.marks) == 2
+
+
+def test_detection_near_rejected_debris_joins_it():
+    # ловушка отвергнута как слишком высокая; сдвинутые ошибкой позы (1.2 м) низкие замеры не дают новой отметки
+    f = M.Fusion()
+    m0 = feed(f, 6, x=0.0, y=0.0, temp=309.0, h=0.5)
+    assert m0.status == M.REJECTED and m0.reason == 'too_tall'
+    m1 = feed(f, 8, x=1.2, y=0.0, temp=309.0, h=0.25)
+    assert m1 is m0 and m1.status == M.REJECTED
+    assert not any(m.status == M.CONFIRMED for m in f.marks)
+
+
+def test_person_two_metres_from_rejected_debris_confirmed():
+    # человек не ближе 2 м от ловушки (generate.py): тень отвергнутой отметки его не глотает
+    f = M.Fusion()
+    feed(f, 6, x=0.0, y=0.0, temp=309.0, h=0.5)
+    m = feed(f, 8, x=2.0, y=0.0, temp=310.0, h=0.2)
+    assert m.status == M.CONFIRMED
+
+
+def test_not_seen_close_does_not_shadow():
+    # отметка, отвергнутая как "не увидели вблизи" (призрак), не глотает соседние детекции
+    f = M.Fusion()
+    m0 = feed(f, 2, x=0.0, y=0.0, rng=6.0)
+    f._set(m0, M.REJECTED, 1.0, 'not_seen_close')
+    m = feed(f, 8, x=1.2, y=0.0, temp=310.0, h=0.2)
+    assert m is not m0 and m.status == M.CONFIRMED
+
+
+def test_few_height_samples_do_not_confirm():
+    f = M.Fusion()
+    # 3 близких вида, высота известна только в двух: ждём третий замер высоты
+    f.update(1.0, 2.0, 'r1', 2.0, 310.0, 0.2, 1.5, 0.0)
+    f.update(1.0, 2.0, 'r1', 2.0, 310.0, 0.2, 1.5, 0.1)
+    m, _ = f.update(1.0, 2.0, 'r1', 2.0, 310.0, float('nan'), 1.5, 0.2)
+    assert m.status == M.CANDIDATE
+    m = feed(f, 1, temp=310.0, h=0.2)
+    assert m.status == M.CONFIRMED
+
+
+def test_fire_outliers_do_not_push_person_out_of_band():
+    # человек 311 K, рядом огонь: 5 замеров 599 K из 20 не делают отметку temp_out_of_band (seed 2 slam)
+    f = M.Fusion()
+    for i in range(15):
+        f.update(1.0, 2.0, 'r1', 2.0, 311.0, float('nan'), 1.5, float(i))
+    for i in range(5):
+        m, _ = f.update(1.0, 2.0, 'r1', 2.0, 599.0, float('nan'), 1.5, 20.0 + i)
+    assert m.status == M.CANDIDATE
+    m = feed(f, 3, temp=311.0, h=0.25)
+    assert m.status == M.CONFIRMED

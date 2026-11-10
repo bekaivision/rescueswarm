@@ -16,7 +16,7 @@ setup(
     maintainer_email='bigalex95@users.noreply.github.com',
     description='Exploration coverage metrics and plots',
     license='Apache-2.0',
-    tests_require=['pytest'],
+    extras_require={'test': ['pytest']},
     entry_points={'console_scripts': [
         'coverage = rs_eval.coverage:main',
         'plot_coverage = rs_eval.plot_coverage:main',

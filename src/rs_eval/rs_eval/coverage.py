@@ -2,6 +2,14 @@
 
 Параметры: mask_dir (каталог мира с coverage_mask.pgm/.yaml), robots, out_dir, target (0.95),
 max_time (сим. секунды, 0 = без лимита), exit_on_done (завершить процесс после записи).
+
+Позы: /<robot>/pose (мировая поза, которой пользуются все; в режиме gt = истинная) и /<robot>/gt_odom
+(истинная, только для оценки). Файлы в out_dir:
+  trajectories.csv     robot,x,y         - траектория по pose (прореженная, шаг > 0.1 м)
+  gt_trajectories.csv  robot,x,y         - то же по gt_odom
+  pose_log.csv         t,robot,source,x,y,yaw - журнал по времени (source = pose | gt, ~5 Гц на источник);
+                       по нему scripts/ate_eval.py считает ATE
+  final_map.npy/.yaml  итоговая карта (строка 0 = низ) и её origin/resolution (для scripts/map_eval.py)
 """
 import csv
 import math
@@ -56,6 +64,8 @@ class Coverage(Node):
         self.dist = {r: 0.0 for r in self.robots}
         self.last = {}
         self.trails = {r: [] for r in self.robots}
+        self.gt_trails = {r: [] for r in self.robots}
+        self.log_last = {}
         self.done_since = None
         self.bids_done = {}
         self.bids_open = {}    # robot -> (время, открытых кандидатов, отказов)
@@ -63,6 +73,8 @@ class Coverage(Node):
         self.search_logged = False
         self.finished = False
         self.finish_reason = ''
+        self.pose_log = open(os.path.join(self.out_dir, 'pose_log.csv'), 'w')
+        self.pose_log.write('t,robot,source,x,y,yaw\n')
         self.csv_path = os.path.join(self.out_dir, 'coverage.csv')
         self.f = open(self.csv_path, 'w', newline='')
         self.w = csv.writer(self.f)
@@ -71,7 +83,8 @@ class Coverage(Node):
                          reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(OccupancyGrid, '/map', self._on_map, qos)
         for r in self.robots:
-            self.create_subscription(Odometry, f'/{r}/odom', lambda m, r=r: self._on_odom(r, m), 10)
+            self.create_subscription(Odometry, f'/{r}/pose', lambda m, r=r: self._on_odom(r, m), 10)
+            self.create_subscription(Odometry, f'/{r}/gt_odom', lambda m, r=r: self._on_gt(r, m), 10)
         self.create_subscription(ExplorationBid, '/exploration/bids', self._on_bid, 20)
         self.pub = self.create_publisher(Float32, '/coverage', 1)
         self.create_timer(1.0, self._tick)
@@ -90,7 +103,25 @@ class Coverage(Node):
         self.n_known = int(((d >= 0) & self.mask).sum())
         self.cov = self.n_known / max(self.n_mask, 1)
 
+    def _log_pose(self, r, source, msg):
+        """Строка в pose_log.csv, не чаще 5 Гц сим. времени на источник."""
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        if t - self.log_last.get((r, source), -1e9) < 0.2:
+            return
+        self.log_last[(r, source)] = t
+        p, q = msg.pose.pose.position, msg.pose.pose.orientation
+        yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+        self.pose_log.write(f'{t:.3f},{r},{source},{p.x:.4f},{p.y:.4f},{yaw:.4f}\n')
+
+    def _on_gt(self, r, msg):
+        p = msg.pose.pose.position
+        tr = self.gt_trails[r]
+        if not tr or math.hypot(p.x - tr[-1][0], p.y - tr[-1][1]) > 0.1:
+            tr.append((p.x, p.y))
+        self._log_pose(r, 'gt', msg)
+
     def _on_odom(self, r, msg):
+        self._log_pose(r, 'pose', msg)
         p = msg.pose.pose.position
         if r in self.last:
             self.dist[r] += math.hypot(p.x - self.last[r][0], p.y - self.last[r][1])
@@ -114,6 +145,7 @@ class Coverage(Node):
         self.w.writerow([f'{ts:.1f}', f'{self.cov:.5f}', self.n_known, self.n_mask]
                         + [f'{self.dist[r]:.2f}' for r in self.robots])
         self.f.flush()
+        self.pose_log.flush()
         # все explorer сообщили done и держат это
         all_done = all(r in self.bids_done and t - self.bids_done[r][0] < 5.0 and self.bids_done[r][1]
                        for r in self.robots)
@@ -159,11 +191,18 @@ class Coverage(Node):
             plots.save_map_png(self.data, self.res, self.ox, self.oy, self.mask, self.trails,
                                os.path.join(self.out_dir, 'final_map.png'), title)
             np.save(os.path.join(self.out_dir, 'final_map.npy'), self.data)
-        with open(os.path.join(self.out_dir, 'trajectories.csv'), 'w') as f:
-            f.write('robot,x,y\n')
-            for r, tr in self.trails.items():
-                for x, y in tr:
-                    f.write(f'{r},{x:.2f},{y:.2f}\n')
+            with open(os.path.join(self.out_dir, 'final_map.yaml'), 'w') as f:
+                yaml.safe_dump({'image': 'final_map.npy', 'resolution': float(self.res),
+                                'origin': [float(self.ox), float(self.oy), 0.0],
+                                'shape_hw': [int(self.data.shape[0]), int(self.data.shape[1])],
+                                'row0': 'bottom'}, f)
+        self.pose_log.flush()
+        for name, trails in (('trajectories.csv', self.trails), ('gt_trajectories.csv', self.gt_trails)):
+            with open(os.path.join(self.out_dir, name), 'w') as f:
+                f.write('robot,x,y\n')
+                for r, tr in trails.items():
+                    for x, y in tr:
+                        f.write(f'{r},{x:.2f},{y:.2f}\n')
         plots.plot_coverage([self.csv_path], os.path.join(self.out_dir, 'coverage.png'),
                             labels=[os.path.basename(self.out_dir.rstrip('/'))])
         with open(os.path.join(self.out_dir, 'summary.txt'), 'w') as f:

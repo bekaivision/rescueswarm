@@ -140,7 +140,7 @@ class Explorer(Node):
         map_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(OccupancyGrid, '/map', self._on_map, map_qos)
-        self.create_subscription(Odometry, 'odom', self._on_odom, 10)
+        self.create_subscription(Odometry, 'pose', self._on_odom, 10)
         self.create_subscription(PoseArray, '/fleet/poses', self._on_fleet, 5)
         self.create_subscription(ExplorationBid, '/exploration/bids', self._on_bid, 20)
         self.create_subscription(PersonMarkArray, '/people/inspect_requests', self._on_requests, 5)

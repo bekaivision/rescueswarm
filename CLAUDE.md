@@ -26,13 +26,19 @@
 | `make search [SEED=1] [N=3] [MAXTIME=900] [RGB=1\|0]` | Фаза 3: поиск людей по тепловизору и YOLO по RGB (RGB=0: только тепловизор; исследование + осмотр кандидатов; Gazebo с окном + RViz) |
 | `make search-headless [SEED=1] [N=3] [MAXTIME=900] [RGB=1\|0]` | то же без окон, результаты в `results/phase-3/run_seed_<SEED>/` (`people.json`, `detections.jsonl`, `rgb_detections.jsonl`); RGB=0: в `results/phase-3/run_seed_<SEED>_thermal_only/` |
 | `make check-phase3 [CHECK_SEEDS="1 2 3 7"] [MAX_SIM_S=900] [RGB=1\|0]` | скриптовая проверка Фазы 3 (`scripts/phase3_eval.py`), результаты в `results/phase-3/check/`; RGB=0 (только тепловизор): `results/phase-3/check_thermal_only/` |
+| `make explore-headless\|search-headless LOC=slam` | Фаза 4: поза от `mrg_slam` + колёса + гироскоп (`slam_adapter`) вместо истинной (`LOC=gt` по умолчанию); `OUT=/workspace/путь` другой каталог результатов, `EXTRA='perception:=false'` доп. аргументы launch |
+| `make slam-smoke [SLAMDUR=120]` | Фаза 4: `mrg_slam` на одном роботе в открытом мире, результаты в `results/phase-4/smoke/` |
+| `make check-phase4 [CHECK_SEEDS="1 2 3 7"] [MAX_SIM_S=900] [RGB=1\|0]` | скриптовая проверка Фазы 4: поиск людей на каждом seed с истинной позой (gt) и со SLAM, ATE, качество карты, сводка в `results/phase-4/check/summary.md` |
 | `make sim [WORLD=file.sdf]` | Gazebo с окном, по умолчанию `shapes.sdf` |
 | `make sim-headless` | Gazebo без окна на `configs/worlds/phase0_bench.sdf` |
 | `make video PHASE=0` | Видео Фазы 0 в `media/phase-0.mp4` (`scripts/video/phase0.sh`; кадры в `media/raw/phase-0/`, `--rerecord` снимает заново) |
 | `make video PHASE=1` | Видео Фазы 1 в `media/phase-1.mp4` (`scripts/video/phase1.sh`; сырьё в `media/raw/phase-1/`; снимается окно RViz на экране, пересъёмка: `scripts/video/phase1.sh --rerecord`) |
 | `make video PHASE=2 [SEED=1] [RERECORD=1]` | Видео Фазы 2 в `media/phase-2.mp4` (`scripts/video/phase2.sh`; сырьё в `media/raw/phase-2/`: запись headless-прогона + кадры рисуются из неё, экран не нужен; из кэша собирается за ~1 мин, `RERECORD=1` пишет прогон заново, ~5 мин) |
 | `make video PHASE=3 [SEED=1] [RERECORD=1]` | Видео Фазы 3 в `media/phase-3.mp4` (`scripts/video/phase3.sh`; сырьё в `media/raw/phase-3/`: запись headless-прогона поиска (карта, отметки, тепловые кадры) + кадры рисуются из неё, экран не нужен; из кэша ~1-2 мин, `RERECORD=1` пишет прогон заново, ~5-8 мин) |
-| `make eval`, `make video PHASE=<n>` (n>3) | Заглушки (код 1), реализация позже |
+| `make video PHASE=4 [SEED=1] [RERECORD=1]` | Видео Фазы 4 в `media/phase-4.mp4` (gt против slam; `RERECORD=1` пишет заново) |
+| `make eval`, `make video PHASE=<n>` (n>4) | Заглушки (код 1), реализация позже |
+
+Фаза 4: оценка `scripts/ate_eval.py`, `scripts/map_eval.py`, сводка `scripts/phase4_summary.py <каталог> "1 2 3 7"` (хост, stdlib). Отчёт: [docs/PHASE_4_REPORT.md](docs/PHASE_4_REPORT.md).
 
 Замер Фазы 2: `scripts/bench_phase2.sh headless|gui [секунды] [N]`. Отчёт: [docs/PHASE_2_REPORT.md](docs/PHASE_2_REPORT.md).
 

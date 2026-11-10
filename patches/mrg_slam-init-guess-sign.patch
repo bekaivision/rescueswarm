@@ -1,0 +1,11 @@
+--- a/apps/scan_matching_odometry_component.cpp	2026-11-09 10:06:26.081110779 +0300
++++ b/apps/scan_matching_odometry_component.cpp	2026-11-09 12:54:33.915855161 +0300
+@@ -258,7 +258,7 @@
+                                     "failed to look up transform between " << cloud->header.frame_id << " and " << robot_odom_frame_id );
+             } else {
+                 msf_source = "odometry";
+-                msf_delta  = tf2isometry( transform ).cast<float>();
++                msf_delta  = tf2isometry( transform ).inverse().cast<float>();  // PATCH: lookupTransform(base@now <- base@prev) is the inverse of the motion
+             }
+         }
+ 

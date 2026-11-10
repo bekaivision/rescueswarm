@@ -2,10 +2,16 @@
 
 Шаги: генератор мира (seed) -> Gazebo + роботы с истинной позой -> общая карта ->
 other_robots (роботы видят друг друга) -> Nav2 с collision_monitor на каждого -> explorer на каждого (аукцион) -> узел покрытия. Человек не нужен.
-Аргументы: seed, size, n, headless, rviz, perception, out_dir, target_coverage, max_time (сим. с, 0 = без лимита).
+Аргументы: seed, size, n, headless, rviz, perception, out_dir, target_coverage, max_time (сим. с, 0 = без лимита),
+localization (gt по умолчанию | slam), world_src (готовый мир вместо генерации).
+Контракт позы: /<robot>/pose (world -> base_link, из TF узлом pose_from_tf) - единственная мировая поза для всех
+потребителей; /<robot>/gt_odom - истинная поза только для оценки.
+gt: TF и /odom истинные (как в Фазе 3b). slam: /odom и TF odom -> base_link от колёс (с дрейфом); TF world -> odom
+публикует slam_adapter (slam.launch.py: mrg_slam на каждого робота, карта привязана к world по позам старта).
 Результаты (мир, CSV, карта, график) лежат в out_dir.
 """
 import os
+import shutil
 import subprocess
 import sys
 
@@ -31,13 +37,21 @@ def launch_setup(context):
     os.makedirs(world_dir, exist_ok=True)
 
     # генератор мира: один раз, до запуска симулятора
-    subprocess.run([sys.executable, '-m', 'rs_worlds.generate', '--seed', str(seed),
-                    '--out', world_dir, '--size', size], check=True)
+    world_src = arg('world_src')
+    if world_src:
+        # готовый мир (например, для опытов с изменённой геометрией): копируем вместо генерации
+        shutil.copytree(world_src, world_dir, dirs_exist_ok=True)
+    else:
+        subprocess.run([sys.executable, '-m', 'rs_worlds.generate', '--seed', str(seed),
+                        '--out', world_dir, '--size', size], check=True)
     with open(os.path.join(world_dir, 'ground_truth.yaml')) as f:
         gt = yaml.safe_load(f)
     poses = ';'.join(f"{p['x']},{p['y']},{p['yaw']}" for p in gt['spawn_poses'][:n])
     b = gt['building']
     region = [b['xmin'] - 1.0, b['ymin'] - 1.0, b['xmax'] + 1.0, b['ymax'] + 1.0]  # как маска покрытия
+    loc = arg('localization').lower()
+    if loc not in ('gt', 'slam'):
+        raise RuntimeError(f"localization: '{loc}', нужно gt или slam")
     robots = [f'ground_{i}' for i in range(1, n + 1)]
     bringup = get_package_share_directory('rs_bringup')
     sim = {'use_sim_time': True}
@@ -47,9 +61,14 @@ def launch_setup(context):
             PythonLaunchDescriptionSource(os.path.join(bringup, 'launch', 'robots.launch.py')),
             launch_arguments={
                 'n': str(n), 'headless': str(headless).lower(), 'rviz': str(use_rviz).lower(),
-                'world': os.path.join(world_dir, 'world.sdf'), 'gt_pose': 'true', 'poses': poses,
+                'world': os.path.join(world_dir, 'world.sdf'), 'localization': loc, 'poses': poses,
+                # в slam world -> odom публикует slam_adapter, в gt - статический единичный
+                'static_world_odom': 'false' if loc == 'slam' else 'true',
                 'rviz_config': os.path.join(bringup, 'rviz', 'explore.rviz'),
             }.items()),
+        # единая мировая поза /<robot>/pose из TF (в gt это истинная поза, в slam - оценка SLAM)
+        Node(package='rs_mapping', executable='pose_from_tf', name='pose_from_tf', output='screen',
+             parameters=[sim, {'robots': robots}]),
         Node(package='rs_mapping', executable='shared_map', name='shared_map', output='screen',
              parameters=[sim, {'robots': robots, 'gt_file': os.path.join(world_dir, 'ground_truth.yaml')}]),
         # роботы видят друг друга: виртуальные сканы для costmap и collision_monitor
@@ -59,6 +78,10 @@ def launch_setup(context):
             PythonLaunchDescriptionSource(os.path.join(bringup, 'launch', 'nav2_multi.launch.py')),
             launch_arguments={'n': str(n)}.items()),
     ]
+    if loc == 'slam':
+        actions.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(bringup, 'launch', 'slam.launch.py')),
+            launch_arguments={'n': str(n), 'poses': poses, 'out_dir': out_dir}.items()))
     for i, r in enumerate(robots, start=1):
         actions.append(Node(
             package='rs_exploration', executable='explorer', name='explorer', namespace=r,
@@ -98,6 +121,8 @@ def generate_launch_description():
         DeclareLaunchArgument('target_coverage', default_value='0.95'),
         DeclareLaunchArgument('perception', default_value='true', description='тепловые детекторы и слияние отметок людей'),
         DeclareLaunchArgument('rgb', default_value='true', description='YOLO по RGB как дополнительный признак (нужен perception)'),
+        DeclareLaunchArgument('world_src', default_value='', description='каталог готового мира (world.sdf, ground_truth.yaml, ...) вместо генерации по seed'),
+        DeclareLaunchArgument('localization', default_value='gt', description='gt: истинная поза; slam: одометрия колёс + TF world->odom от slam_adapter (mrg_slam)'),
         DeclareLaunchArgument('max_time', default_value='0', description='сим. секунды, 0 = без лимита'),
     ]
     return LaunchDescription(decl + [OpaqueFunction(function=launch_setup)])

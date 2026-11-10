@@ -2,7 +2,7 @@
 """Фаза 2: монитор безопасности и «чистоты управления» во время прогона (внутри контейнера).
 
   phase2_monitor.py OUT_JSON WORLD_DIR [N=3]
-Подписывается на /ground_i/odom (истинная поза), считает:
+Подписывается на /ground_i/pose (мировая поза; в режиме gt истинная), считает:
   - минимальное расстояние между центрами роботов;
   - число «касаний стен» (центр ближе 0.15 м к занятой клетке gt_map.pgm; считаются заходы);
   - путь каждого робота;
@@ -54,7 +54,7 @@ class Monitor(Node):
         self.poses_f.write('t,robot,x,y,yaw\n')
         self.last_log = {r: -1e9 for r in self.robots}
         for r in self.robots:
-            self.create_subscription(Odometry, f'/{r}/odom', lambda m, r=r: self._odom(r, m), qos_profile_sensor_data)
+            self.create_subscription(Odometry, f'/{r}/pose', lambda m, r=r: self._odom(r, m), qos_profile_sensor_data)
         self.create_timer(2.0, self._pubs)
         self.create_timer(5.0, self._write)
 

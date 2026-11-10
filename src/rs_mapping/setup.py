@@ -16,7 +16,10 @@ setup(
     maintainer_email='bigalex95@users.noreply.github.com',
     description='Shared occupancy grid built from all robots lidars',
     license='Apache-2.0',
-    tests_require=['pytest'],
+    extras_require={'test': ['pytest']},
     entry_points={'console_scripts': ['shared_map = rs_mapping.shared_map:main',
-                                      'other_robots = rs_mapping.other_robots:main']},
+                                      'other_robots = rs_mapping.other_robots:main',
+                                      'pose_from_tf = rs_mapping.pose_from_tf:main',
+                                      'slam_adapter = rs_mapping.slam_adapter:main',
+                                      'slam_cloud_crop = rs_mapping.slam_cloud_crop:main']},
 )

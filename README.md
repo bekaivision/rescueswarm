@@ -18,7 +18,12 @@ people may be found. All work runs in simulation.
 - **Phase 3 and 3b, done:** thermal people search with decoys (fire, batteries, warm
   debris), candidate inspection through the auction, and YOLO on RGB as an extra cue
   with the Rescue Randy model. See [report](docs/PHASE_3_REPORT.md).
-- **Next:** Phase 4, real SLAM.
+- **Phase 4, done (with caveats):** Phases 2-3 run on poses from `mrg_slam` fused with
+  wheel odometry and gyro instead of ground truth (`LOC=slam`). On 4 seeds all 19
+  reachable people are confirmed, no decoys, ATE rmse 0.26 m, but map precision is 0.70
+  against 0.97 with ground truth. Loop closures are off and start poses are known. See
+  [report](docs/PHASE_4_REPORT.md).
+- **Next:** Phase 5, drones and the mixed swarm.
 
 The full research plan is in [docs/PLAN.md](docs/PLAN.md). Plan and reports are
 written in Russian.
@@ -33,6 +38,8 @@ make build                    # colcon build inside the container
 make explore SEED=1           # Gazebo + RViz, 3 robots explore a generated world
 make explore-headless SEED=1  # same without windows
 make check-phase2             # scripted Phase 2 check, results in results/phase-2/
+make search-headless SEED=1 LOC=slam   # people search on SLAM poses instead of ground truth
+make check-phase4             # Phase 4 check, ground truth vs SLAM, results in results/phase-4/
 ```
 
 Run `make help` for all commands.

@@ -19,3 +19,8 @@ __pycache__/
 # Local environment
 .env
 .pytest_cache/
+
+# Эксперимент Фазы 4 (отдельные каталоги сборки)
+build_slam/
+install_slam/
+log_slam/

@@ -74,7 +74,7 @@ class SharedMap(Node):
         for r in self.robots:
             self.create_subscription(PointCloud2, f'/{r}/lidar/points',
                                      lambda m, r=r: self._on_cloud(r, m), sensor_qos)
-            self.create_subscription(Odometry, f'/{r}/odom',
+            self.create_subscription(Odometry, f'/{r}/pose',
                                      lambda m, r=r: self._on_odom(r, m), 10)
         map_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              reliability=ReliabilityPolicy.RELIABLE)
