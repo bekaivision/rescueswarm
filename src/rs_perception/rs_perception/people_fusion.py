@@ -11,6 +11,7 @@ import rclpy
 import numpy as np
 from geometry_msgs.msg import Point, PoseArray
 from nav_msgs.msg import OccupancyGrid
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rs_interfaces.msg import PersonMark, PersonMarkArray, RgbDetection, ThermalDetection
@@ -33,8 +34,10 @@ class PeopleFusion(Node):
             self.declare_parameter(k, v)
         self.declare_parameter('out_dir', '')
         self.declare_parameter('robots', ['ground_1', 'ground_2', 'ground_3'])
+        # дроны (Фаза 5); dynamic_typing: пустой список из launch не имеет типа
+        self.declare_parameter('air_robots', [], ParameterDescriptor(dynamic_typing=True))
         params = {k: self.get_parameter(k).value for k in M.DEFAULTS}
-        self.fusion = M.Fusion(params)
+        self.fusion = M.Fusion(params, list(self.get_parameter('air_robots').value or []))
         self.out_dir = self.get_parameter('out_dir').value
         if self.out_dir:
             os.makedirs(self.out_dir, exist_ok=True)

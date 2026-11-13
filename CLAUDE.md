@@ -29,6 +29,10 @@
 | `make explore-headless\|search-headless LOC=slam` | Фаза 4: поза от `mrg_slam` + колёса + гироскоп (`slam_adapter`) вместо истинной (`LOC=gt` по умолчанию); `OUT=/workspace/путь` другой каталог результатов, `EXTRA='perception:=false'` доп. аргументы launch |
 | `make slam-smoke [SLAMDUR=120]` | Фаза 4: `mrg_slam` на одном роботе в открытом мире, результаты в `results/phase-4/smoke/` |
 | `make check-phase4 [CHECK_SEEDS="1 2 3 7"] [MAX_SIM_S=900] [RGB=1\|0]` | скриптовая проверка Фазы 4: поиск людей на каждом seed с истинной позой (gt) и со SLAM, ATE, качество карты, сводка в `results/phase-4/check/summary.md` |
+| `make explore\|search[-headless] DRONES=2 [DBACK=light\|px4]` | Фаза 5: те же прогоны с дронами `drone_1..M` (смешанный рой, одна карта: `/map`, слои `/map_ground` и `/map_air`); `light` - простая модель полёта, `px4` - PX4 SITL v1.17 (offboard, поза от EKF) |
+| `make check-phase5 [CHECK_SEEDS="1 2 3 7"] [MAX_SIM_S=900] [DRONES=2] [DBACK=light\|px4] [MODES="ground mixed"]` | скриптовая проверка Фазы 5: на каждом seed только наземные роботы и смешанный рой, сводка в `results/phase-5/check/summary.md` (`DBACK=px4`: `results/phase-5/check_px4/`) |
+| `make px4-smoke` | Фаза 5: два дрона PX4 SITL в мире PX4 летят квадрат в offboard из ROS 2, результаты в `results/phase-5/px4_smoke/` (нужен `install_px4` с `px4_msgs`) |
+| `make video PHASE=5 [SEED=1] [RERECORD=1] [VIDEO_DBACK=px4\|light]` | Видео Фазы 5 в `media/phase-5.mp4` (`scripts/video/phase5.sh`; сырьё в `media/raw/phase-5/`; запись прогона смешанного роя с PX4, ~5-10 мин) |
 | `make sim [WORLD=file.sdf]` | Gazebo с окном, по умолчанию `shapes.sdf` |
 | `make sim-headless` | Gazebo без окна на `configs/worlds/phase0_bench.sdf` |
 | `make video PHASE=0` | Видео Фазы 0 в `media/phase-0.mp4` (`scripts/video/phase0.sh`; кадры в `media/raw/phase-0/`, `--rerecord` снимает заново) |
@@ -36,7 +40,17 @@
 | `make video PHASE=2 [SEED=1] [RERECORD=1]` | Видео Фазы 2 в `media/phase-2.mp4` (`scripts/video/phase2.sh`; сырьё в `media/raw/phase-2/`: запись headless-прогона + кадры рисуются из неё, экран не нужен; из кэша собирается за ~1 мин, `RERECORD=1` пишет прогон заново, ~5 мин) |
 | `make video PHASE=3 [SEED=1] [RERECORD=1]` | Видео Фазы 3 в `media/phase-3.mp4` (`scripts/video/phase3.sh`; сырьё в `media/raw/phase-3/`: запись headless-прогона поиска (карта, отметки, тепловые кадры) + кадры рисуются из неё, экран не нужен; из кэша ~1-2 мин, `RERECORD=1` пишет прогон заново, ~5-8 мин) |
 | `make video PHASE=4 [SEED=1] [RERECORD=1]` | Видео Фазы 4 в `media/phase-4.mp4` (gt против slam; `RERECORD=1` пишет заново) |
-| `make eval`, `make video PHASE=<n>` (n>4) | Заглушки (код 1), реализация позже |
+| `make eval`, `make video PHASE=<n>` (n>5) | Заглушки (код 1), реализация позже |
+
+Фаза 5: оценка слоёв карты `scripts/layers_eval.py <каталог прогона>` (RQ3: сдвиг воздушного слоя
+относительно наземного), сводка `scripts/phase5_summary.py <каталог> "1 2 3 7"` (хост, stdlib + numpy).
+Отчёт: [docs/PHASE_5_REPORT.md](docs/PHASE_5_REPORT.md). Образ `rescueswarm-dev:jazzy` содержит PX4
+(`/opt/px4`, этап `px4-build` в Dockerfile) и `MicroXRCEAgent`; `px4_msgs` в `deps.repos`, версия
+меняется только вместе с `PX4_VERSION` в Dockerfile. В `docker/compose.yaml` `GZ_IP=127.0.0.1`:
+без этого gz-transport объявлял адрес tailscale0, и `/clock` иногда не доходил до узлов.
+Параметры PX4 задаёт `src/rs_drone/scripts/px4_instance.sh`: `EKF2_GPS_DELAY=0` обязателен (при умолчании
+110 мс поза EKF уходит вперёд на 0.11 с x скорость, и воздушный слой карты «размазывается»), `NAV_DLL_ACT`
+ставится через `px4-param` после старта (через env его перезаписывает airframe).
 
 Фаза 4: оценка `scripts/ate_eval.py`, `scripts/map_eval.py`, сводка `scripts/phase4_summary.py <каталог> "1 2 3 7"` (хост, stdlib). Отчёт: [docs/PHASE_4_REPORT.md](docs/PHASE_4_REPORT.md).
 

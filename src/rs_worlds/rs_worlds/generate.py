@@ -502,6 +502,17 @@ def _zones(w):
     return zones
 
 
+AIR_SPAWN_DY = 2.0                 # на сколько южнее ряда наземных роботов стартуют дроны, м
+AIR_SPAWN_DX = (-1.5, 1.5, 0.0)    # смещения по x от оси входа (порядок: drone_1, drone_2, drone_3)
+
+
+def air_spawns(w):
+    """Позы старта дронов. Только добавляются к ground_truth, мир и карты от них не зависят."""
+    xs, H = w['lay']['xs'], w['lay']['H']
+    y = -H / 2.0 - 0.8 - AIR_SPAWN_DY
+    return [dict(x=_r(xs + dx), y=_r(y), yaw=_r(math.pi / 2.0)) for dx in AIR_SPAWN_DX]
+
+
 def ground_truth(w):
     lay, g, an = w['lay'], w['grid'], w['an']
     zones = _zones(w)
@@ -562,6 +573,8 @@ def ground_truth(w):
         robot_radius=ROBOT_RADIUS, stats=stats, zones=zones, obstacles=obstacles,
         people=people, decoys=decoys,
         spawn_poses=[dict(x=_r(s['x']), y=_r(s['y']), yaw=_r(s['yaw'])) for s in w['spawn']],
+        # старт дронов: на 2 м южнее ряда наземных роботов, тот же курс (в здание)
+        air_spawns=air_spawns(w),
     )
 
 

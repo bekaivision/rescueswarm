@@ -1,7 +1,14 @@
 """Узел coverage: покрытие карты внутри маски, CSV, флаг завершения, итоговые картинки.
 
 Параметры: mask_dir (каталог мира с coverage_mask.pgm/.yaml), robots, out_dir, target (0.95),
-max_time (сим. секунды, 0 = без лимита), exit_on_done (завершить процесс после записи).
+max_time (сим. секунды, 0 = без лимита), exit_on_done (завершить процесс после записи),
+air_robots (дроны, по умолчанию пусто; Фаза 5).
+
+Дроны (air_robots не пусто): позы /<drone>/pose и /<drone>/gt_odom пишутся в pose_log.csv в том же
+формате (для scripts/ate_eval.py); в coverage.csv в КОНЕЦ добавляются столбцы cov_ground и cov_air
+(покрытие слоёв /map_ground и /map_air по тому же определению); запуск завершён, только когда done
+сообщили все наземные explorer (/exploration/bids) и все воздушные (/exploration/air_bids) и это держится
+done_hold с. С пустым air_robots все файлы и поведение прежние.
 
 Позы: /<robot>/pose (мировая поза, которой пользуются все; в режиме gt = истинная) и /<robot>/gt_odom
 (истинная, только для оценки). Файлы в out_dir:
@@ -20,6 +27,7 @@ import rclpy
 import yaml
 from nav_msgs.msg import OccupancyGrid, Odometry
 from PIL import Image
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rs_interfaces.msg import ExplorationBid
@@ -50,7 +58,10 @@ class Coverage(Node):
         P('search_wait', False)   # не завершать по покрытию, пока есть открытые кандидаты-люди (Фаза 3)
         P('search_hold', 3.0)     # сек. сим. времени "нет открытых кандидатов" подряд
         P('done_hold', 5.0)   # сек. сим. времени, которые все explorer должны держать done
+        # дроны; динамический тип: пустой список по умолчанию (иначе rclpy не выводит тип пустого массива)
+        self.declare_parameter('air_robots', [], ParameterDescriptor(dynamic_typing=True))
         self.robots = list(self.get_parameter('robots').value)
+        self.air = list(self.get_parameter('air_robots').value or [])
         self.out_dir = self.get_parameter('out_dir').value
         os.makedirs(self.out_dir, exist_ok=True)
         self.mask, self.res, self.ox, self.oy = load_mask(self.get_parameter('mask_dir').value)
@@ -68,6 +79,9 @@ class Coverage(Node):
         self.log_last = {}
         self.done_since = None
         self.bids_done = {}
+        self.air_done = {}     # дрон -> (время, done)
+        self.cov_layers = {'ground': 0.0, 'air': 0.0}
+        self.layer_data = {}   # последние /map_ground и /map_air (для сравнения слоёв, RQ3)
         self.bids_open = {}    # robot -> (время, открытых кандидатов, отказов)
         self.search_free_since = None
         self.search_logged = False
@@ -78,7 +92,8 @@ class Coverage(Node):
         self.csv_path = os.path.join(self.out_dir, 'coverage.csv')
         self.f = open(self.csv_path, 'w', newline='')
         self.w = csv.writer(self.f)
-        self.w.writerow(['sim_time_s', 'coverage', 'n_known', 'n_mask'] + [f'dist_{r}' for r in self.robots])
+        self.w.writerow(['sim_time_s', 'coverage', 'n_known', 'n_mask'] + [f'dist_{r}' for r in self.robots]
+                        + (['cov_ground', 'cov_air'] if self.air else []))
         qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                          reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(OccupancyGrid, '/map', self._on_map, qos)
@@ -86,6 +101,13 @@ class Coverage(Node):
             self.create_subscription(Odometry, f'/{r}/pose', lambda m, r=r: self._on_odom(r, m), 10)
             self.create_subscription(Odometry, f'/{r}/gt_odom', lambda m, r=r: self._on_gt(r, m), 10)
         self.create_subscription(ExplorationBid, '/exploration/bids', self._on_bid, 20)
+        if self.air:
+            self.create_subscription(OccupancyGrid, '/map_ground', lambda m: self._on_layer('ground', m), qos)
+            self.create_subscription(OccupancyGrid, '/map_air', lambda m: self._on_layer('air', m), qos)
+            for r in self.air:
+                self.create_subscription(Odometry, f'/{r}/pose', lambda m, r=r: self._log_pose(r, 'pose', m), 10)
+                self.create_subscription(Odometry, f'/{r}/gt_odom', lambda m, r=r: self._log_pose(r, 'gt', m), 10)
+            self.create_subscription(ExplorationBid, '/exploration/air_bids', self._on_air_bid, 20)
         self.pub = self.create_publisher(Float32, '/coverage', 1)
         self.create_timer(1.0, self._tick)
         self.get_logger().info(f'маска: {self.n_mask} клеток ({self.n_mask * self.res ** 2:.1f} м2), цель {self.target:.0%}')
@@ -102,6 +124,17 @@ class Coverage(Node):
         self.data = d
         self.n_known = int(((d >= 0) & self.mask).sum())
         self.cov = self.n_known / max(self.n_mask, 1)
+
+    def _on_layer(self, name, msg):
+        """Покрытие слоя карты: та же формула, что у coverage (известные клетки в маске / клеток маски)."""
+        d = np.asarray(msg.data, dtype=np.int8).reshape(msg.info.height, msg.info.width)
+        if d.shape == self.mask.shape:
+            self.cov_layers[name] = int(((d >= 0) & self.mask).sum()) / max(self.n_mask, 1)
+            self.layer_data[name] = d
+
+    def _on_air_bid(self, msg):
+        if msg.robot_id in self.air:
+            self.air_done[msg.robot_id] = (self._now(), msg.done)
 
     def _log_pose(self, r, source, msg):
         """Строка в pose_log.csv, не чаще 5 Гц сим. времени на источник."""
@@ -143,12 +176,16 @@ class Coverage(Node):
         ts = t - self.t0
         self.pub.publish(Float32(data=float(self.cov)))
         self.w.writerow([f'{ts:.1f}', f'{self.cov:.5f}', self.n_known, self.n_mask]
-                        + [f'{self.dist[r]:.2f}' for r in self.robots])
+                        + [f'{self.dist[r]:.2f}' for r in self.robots]
+                        + ([f'{self.cov_layers["ground"]:.5f}', f'{self.cov_layers["air"]:.5f}'] if self.air else []))
         self.f.flush()
         self.pose_log.flush()
         # все explorer сообщили done и держат это
         all_done = all(r in self.bids_done and t - self.bids_done[r][0] < 5.0 and self.bids_done[r][1]
                        for r in self.robots)
+        # дроны: их explorer тоже должны сообщить done (топик /exploration/air_bids)
+        all_done = all_done and all(r in self.air_done and t - self.air_done[r][0] < 5.0 and self.air_done[r][1]
+                                    for r in self.air)
         if all_done:
             self.done_since = self.done_since if self.done_since is not None else t
         else:
@@ -168,7 +205,8 @@ class Coverage(Node):
             self.search_logged = True
             gave = sorted({g for v in self.bids_open.values() for g in v[2]})
             self.get_logger().info(f'SEARCH COMPLETE t={ts:.1f}: открытых кандидатов нет, оставлено: {gave or "нет"}')
-        if self.cov >= self.target and search_ok:
+        held = self.done_since is not None and t - self.done_since >= float(self.get_parameter('done_hold').value)
+        if self.cov >= self.target and search_ok and (held or not self.air):
             self._finish(ts, f'покрытие {self.cov:.1%} >= {self.target:.0%}')
         elif self.done_since is not None and search_ok and \
                 t - self.done_since >= float(self.get_parameter('done_hold').value):
@@ -196,6 +234,9 @@ class Coverage(Node):
                                 'origin': [float(self.ox), float(self.oy), 0.0],
                                 'shape_hw': [int(self.data.shape[0]), int(self.data.shape[1])],
                                 'row0': 'bottom'}, f)
+        # слои воздух/земля в той же сетке (origin и resolution как у final_map.yaml)
+        for name, d in self.layer_data.items():
+            np.save(os.path.join(self.out_dir, f'final_map_{name}.npy'), d)
         self.pose_log.flush()
         for name, trails in (('trajectories.csv', self.trails), ('gt_trajectories.csv', self.gt_trails)):
             with open(os.path.join(self.out_dir, name), 'w') as f:

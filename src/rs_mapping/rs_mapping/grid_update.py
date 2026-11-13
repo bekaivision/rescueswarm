@@ -21,7 +21,8 @@ def cloud_to_array(data, width, height, point_step, offsets):
 class GridUpdater:
     def __init__(self, width, height, res, origin_x, origin_y, *, z_min=0.05, z_max=1.5,
                  hit=0.85, miss=0.3, l_min=-2.0, l_max=3.5, occ_thr=0.4,
-                 subrays=5, max_range=30.0, robot_clear=0.4, self_clear=0.3, min_range=0.12):
+                 subrays=5, max_range=30.0, robot_clear=0.4, self_clear=0.3, min_range=0.12,
+                 free_z_max=2.5, drone_clear_xy=0.5, drone_clear_z=0.5):
         self.w, self.h, self.res = width, height, res
         self.ox, self.oy = origin_x, origin_y
         self.z_min, self.z_max = z_min, z_max
@@ -29,6 +30,10 @@ class GridUpdater:
         self.l_min, self.l_max, self.occ_thr = l_min, l_max, occ_thr
         self.subrays, self.max_range = subrays, max_range
         self.robot_clear, self.self_clear, self.min_range = robot_clear, self_clear, min_range
+        # выше free_z_max точки не годятся для свободного пространства: это летящий дрон,
+        # а не стена (в мирах без дронов выше 2.0 м ничего нет, поведение то же)
+        self.free_z_max = free_z_max
+        self.drone_clear_xy, self.drone_clear_z = drone_clear_xy, drone_clear_z
         self.logodds = np.zeros(width * height, dtype=np.float32)
         self.seen = np.zeros(width * height, dtype=bool)
         self._tmp = np.zeros(width * height, dtype=bool)
@@ -48,11 +53,13 @@ class GridUpdater:
         ok = (ix >= 0) & (ix < self.w) & (iy >= 0) & (iy < self.h)
         return ix, iy, ok
 
-    def update(self, pts, T, other_robots=(), self_xy=None):
+    def update(self, pts, T, other_robots=(), self_xy=None, drones=()):
         """pts: (rows, cols, 3) в кадре лидара (NaN = нет возврата), T: 4x4 мир <- лидар.
 
         other_robots: список (x, y) других роботов в мире: точки рядом с корпусом отбрасываем
         (радиус robot_clear); self_xy: свой робот (радиус self_clear, меньше: робот может ехать у стены).
+        drones: список (x, y, z) дронов в мире: точки в 0.5 м по xy и 0.5 м по z отбрасываем
+        (дрон на земле до взлёта не должен стать вечным препятствием).
         Возвращает (число занятых клеток, число свободных клеток) этого скана.
         """
         rows, cols, _ = pts.shape
@@ -71,6 +78,13 @@ class GridUpdater:
         if self_xy is not None:
             near = np.hypot(world[:, 0] - self_xy[0], world[:, 1] - self_xy[1]) < self.self_clear
             fin &= ~near
+
+        for (dx_, dy_, dz_) in drones:
+            near = ((np.hypot(world[:, 0] - dx_, world[:, 1] - dy_) < self.drone_clear_xy)
+                    & (np.abs(world[:, 2] - dz_) < self.drone_clear_z))
+            fin &= ~near
+        # слишком высокие точки (летящий дрон) не режут свободное пространство
+        fin &= world[:, 2] <= self.free_z_max
 
         obst = fin & (world[:, 2] >= self.z_min) & (world[:, 2] <= self.z_max)
         col = np.tile(np.arange(cols), rows)

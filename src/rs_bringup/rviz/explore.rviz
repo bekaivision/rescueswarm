@@ -281,6 +281,94 @@ Visualization Manager:
     Use Fixed Frame: true
     Position Transformer: XYZ
     Selectable: false
+  - Class: rviz_default_plugins/Map
+    Name: map_air (drones only)
+    Enabled: false
+    Value: false
+    Topic:
+      Value: /map_air
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Color Scheme: map
+    Alpha: 0.6
+    Draw Behind: false
+    Use Timestamp: false
+  - Class: rviz_default_plugins/RobotModel
+    Name: drone_1 model
+    Enabled: true
+    Value: true
+    Description Source: Topic
+    Description Topic:
+      Value: /drone_1/robot_description
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter topic: ''
+    TF Prefix: drone_1
+    Visual Enabled: true
+    Collision Enabled: false
+    Alpha: 1
+    Update Interval: 0
+  - Class: rviz_default_plugins/PointCloud2
+    Name: drone_1 depth
+    Enabled: false
+    Value: false
+    Topic:
+      Value: /drone_1/depth/points
+      Depth: 2
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter size: 10
+    Style: Points
+    Size (Pixels): 2
+    Size (m): 0.03
+    Alpha: 0.5
+    Color Transformer: FlatColor
+    Color: 255; 170; 0
+    Use Fixed Frame: true
+    Position Transformer: XYZ
+    Selectable: false
+  - Class: rviz_default_plugins/RobotModel
+    Name: drone_2 model
+    Enabled: true
+    Value: true
+    Description Source: Topic
+    Description Topic:
+      Value: /drone_2/robot_description
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter topic: ''
+    TF Prefix: drone_2
+    Visual Enabled: true
+    Collision Enabled: false
+    Alpha: 1
+    Update Interval: 0
+  - Class: rviz_default_plugins/PointCloud2
+    Name: drone_2 depth
+    Enabled: false
+    Value: false
+    Topic:
+      Value: /drone_2/depth/points
+      Depth: 2
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter size: 10
+    Style: Points
+    Size (Pixels): 2
+    Size (m): 0.03
+    Alpha: 0.5
+    Color Transformer: FlatColor
+    Color: 200; 80; 255
+    Use Fixed Frame: true
+    Position Transformer: XYZ
+    Selectable: false
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

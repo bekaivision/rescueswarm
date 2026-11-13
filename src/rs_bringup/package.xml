@@ -25,6 +25,7 @@
   <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
   <exec_depend>nav2_navfn_planner</exec_depend>
   <exec_depend>rs_worlds</exec_depend>
+  <exec_depend>rs_drone</exec_depend>
   <exec_depend>rs_interfaces</exec_depend>
   <exec_depend>rs_mapping</exec_depend>
   <exec_depend>rs_exploration</exec_depend>

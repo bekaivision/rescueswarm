@@ -17,5 +17,8 @@ setup(
     description='Frontier exploration with a decentralized auction',
     license='Apache-2.0',
     extras_require={'test': ['pytest']},
-    entry_points={'console_scripts': ['explorer = rs_exploration.explorer:main']},
+    entry_points={'console_scripts': [
+        'explorer = rs_exploration.explorer:main',
+        'air_explorer = rs_exploration.air_explorer:main',
+    ]},
 )

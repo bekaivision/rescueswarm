@@ -57,6 +57,7 @@ class Mark:
         self.status = CANDIDATE
         self.sx = self.sy = self.sw = 0.0
         self.n_obs = 0
+        self.n_air = 0      # сколько замеров от дронов (Фаза 5)
         self.robots = []
         self.min_range = float('inf')
         self.temps_close, self.temps_all = [], []
@@ -97,7 +98,10 @@ class Mark:
 
 
 class Fusion:
-    def __init__(self, params=None):
+    def __init__(self, params=None, air_robots=()):
+        # air_robots: дроны (Фаза 5). Их детекции создают и обновляют CANDIDATE и идут в too_hot,
+        # но не считаются близкими, не дают высоту/длину и не подтверждают человека.
+        self.air_robots = set(air_robots or ())
         self.p = dict(DEFAULTS)
         if params:
             self.p.update(params)
@@ -134,12 +138,16 @@ class Fusion:
         m.sy += w * y
         m.sw += w
         m.n_obs += 1
-        m.neg = {}   # есть детекция: накопленное "не видим" обнуляем
+        air = robot in self.air_robots
+        if air:
+            m.n_air += 1
+        else:
+            m.neg = {}   # есть детекция: накопленное "не видим" обнуляем (дрон отрицательное свидетельство не трогает)
         if robot not in m.robots:
             m.robots.append(robot)
         m.min_range = min(m.min_range, rng)
         m.temps_all.append(temp)
-        close = rng <= p['close_m']
+        close = rng <= p['close_m'] and not air
         if close:
             m.n_close += 1
             m.temps_close.append(temp)
@@ -180,8 +188,13 @@ class Fusion:
             return True
         if d > self.p['body_merge_m']:
             return False
-        return (self._person_like(a) and self._person_like(b)
-                and abs(a.mean_temp() - b.mean_temp()) <= self.p['body_dtemp_k'])
+        if not (self._person_like(a) and self._person_like(b)):
+            return False
+        # отметка только из воздуха: температура верхней грани с дрона не сравнима с температурой
+        # наземного вида (другое разрешение и ядро пятна), сравнение температур пропускаем
+        if a.n_air == a.n_obs or b.n_air == b.n_obs:
+            return True
+        return abs(a.mean_temp() - b.mean_temp()) <= self.p['body_dtemp_k']
 
     def _merge(self, m):
         """Две отметки одного объекта (разные виды одного тела): сливаем в старую."""
@@ -202,6 +215,7 @@ class Fusion:
             a.sy += b.sy
             a.sw += b.sw
             a.n_obs += b.n_obs
+            a.n_air += b.n_air
             a.n_close += b.n_close
             a.robots += [r for r in b.robots if r not in a.robots]
             a.min_range = min(a.min_range, b.min_range)

@@ -672,10 +672,17 @@ class Explorer(Node):
             self.nav_wait_t0 = self._now()
         if self._now() - self.nav_wait_t0 > self.nav_retry_at and self.lc_cli.service_is_ready():
             self.nav_retry_at += 45.0
+            # Сначала RESET, потом STARTUP: если первый запуск оборвался на середине, часть узлов уже
+            # active, и голый STARTUP навсегда падает на "configure" активного controller_server (Фаза 5, seed 1).
             req = ManageLifecycleNodes.Request()
-            req.command = ManageLifecycleNodes.Request.STARTUP
-            self.lc_cli.call_async(req)
-            self.get_logger().warn('Nav2 не стал активным: повторный запуск через lifecycle_manager')
+            req.command = ManageLifecycleNodes.Request.RESET
+
+            def after_reset(_f):
+                s = ManageLifecycleNodes.Request()
+                s.command = ManageLifecycleNodes.Request.STARTUP
+                self.lc_cli.call_async(s)
+            self.lc_cli.call_async(req).add_done_callback(after_reset)
+            self.get_logger().warn('Nav2 не стал активным: RESET и повторный запуск через lifecycle_manager')
         if self.state_busy or not self.state_cli.service_is_ready():
             return
         self.state_busy = True

@@ -23,7 +23,13 @@ people may be found. All work runs in simulation.
   reachable people are confirmed, no decoys, ATE rmse 0.26 m, but map precision is 0.70
   against 0.97 with ground truth. Loop closures are off and start poses are known. See
   [report](docs/PHASE_4_REPORT.md).
-- **Next:** Phase 5, drones and the mixed swarm.
+- **Phase 5, done:** two drones join the three ground robots and build one shared map
+  (ground and air layers). Drones run either a light flight model or PX4 SITL v1.17 in
+  offboard mode with the PX4 EKF pose. Drones spot warm targets from above; ground
+  robots confirm people up close. On 4 seeds the mixed swarm confirms all 19 reachable
+  people with both drone modes, no decoys, and reaches 90 % coverage in 60-70 s instead
+  of 310 s. See [report](docs/PHASE_5_REPORT.md).
+- **Next:** Phase 6, degraded communication between robots.
 
 The full research plan is in [docs/PLAN.md](docs/PLAN.md). Plan and reports are
 written in Russian.
@@ -40,11 +46,14 @@ make explore-headless SEED=1  # same without windows
 make check-phase2             # scripted Phase 2 check, results in results/phase-2/
 make search-headless SEED=1 LOC=slam   # people search on SLAM poses instead of ground truth
 make check-phase4             # Phase 4 check, ground truth vs SLAM, results in results/phase-4/
+make search DRONES=2          # 3 ground robots + 2 light drones, Gazebo + RViz
+make search-headless DRONES=2 DBACK=px4   # same with PX4 SITL drones, no windows
+make check-phase5             # Phase 5 check, ground only vs mixed swarm, results in results/phase-5/
 ```
 
 Run `make help` for all commands.
 
 ## Stack
 
-ROS 2 Jazzy, Gazebo Harmonic, Nav2, Cyclone DDS. PX4 SITL for drones comes in
-Phase 5.
+ROS 2 Jazzy, Gazebo Harmonic, Nav2, Cyclone DDS, PX4 SITL v1.17 with
+Micro XRCE-DDS for drones.

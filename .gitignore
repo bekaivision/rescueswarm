@@ -24,3 +24,8 @@ __pycache__/
 build_slam/
 install_slam/
 log_slam/
+
+# Фаза 5: отдельная сборка px4_msgs (не трогает build/ и install/)
+build_px4/
+install_px4/
+log_px4/

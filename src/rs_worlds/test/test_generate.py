@@ -105,3 +105,25 @@ def test_decoys(seed):
     for d in gt['decoys']:
         for p in gt['people']:
             assert ((d['x'] - p['x']) ** 2 + (d['y'] - p['y']) ** 2) ** 0.5 >= G.PEOPLE_DECOY_GAP
+
+
+@pytest.mark.parametrize('size', ['small', 'medium'])
+@pytest.mark.parametrize('seed', range(1, 21))
+def test_air_spawns(size, seed):
+    """Стартовые позы дронов: >= 2, южнее наземных, на свободной земле, курс как у наземных."""
+    w = G.build_world(seed, size)
+    g = w['grid']
+    gt = G.ground_truth(w)
+    air = gt['air_spawns']
+    assert len(air) >= 2
+    ground_y = gt['spawn_poses'][0]['y']
+    xs = w['lay']['xs']
+    for a in air:
+        assert a['y'] == pytest.approx(ground_y - 2.0, abs=1e-3)
+        assert abs(a['x'] - xs) <= 1.5 + 1e-3
+        assert a['yaw'] == pytest.approx(gt['spawn_poses'][0]['yaw'])
+        j, i = g.cell(a['x'], a['y'])
+        assert not w['occ'][j, i]
+        assert g.ymin <= a['y'] <= g.ymax
+    # позы дронов не совпадают друг с другом
+    assert len({(a['x'], a['y']) for a in air}) == len(air)

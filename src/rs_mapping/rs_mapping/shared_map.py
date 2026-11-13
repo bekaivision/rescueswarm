@@ -4,6 +4,8 @@
 ошибки SLAM нет). Занятость по log-odds, свободное пространство лучами от лидара.
 Параметры: robots (список), gt_file (ground_truth.yaml: границы карты) или bounds
 [xmin, ymin, xmax, ymax], resolution, z_min, z_max, scan_rate, map_rate.
+Дроны (Фаза 5): air_robots (список), air_scan_rate, air_obst_h, air_free_h, air_max_h,
+free_z_max. При непустом air_robots кроме /map публикуются /map_ground и /map_air.
 """
 import time
 
@@ -11,6 +13,7 @@ import numpy as np
 import rclpy
 import yaml
 from nav_msgs.msg import OccupancyGrid, Odometry
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -18,6 +21,7 @@ from rclpy.time import Time
 from sensor_msgs.msg import PointCloud2
 from tf2_ros import Buffer, TransformException, TransformListener
 
+from rs_mapping.air_update import AirLayer, fuse
 from rs_mapping.grid_update import GridUpdater, cloud_to_array
 
 
@@ -42,8 +46,19 @@ class SharedMap(Node):
         self.declare_parameter('scan_rate', 3.0)   # Гц на робота
         self.declare_parameter('map_rate', 1.0)    # Гц публикации /map
         self.declare_parameter('robot_clear', 0.4)  # радиус отбрасывания точек вокруг роботов, м
+        # dynamic_typing: пустой список из launch не имеет типа, а типизированный параметр
+        # без значения бросает ParameterUninitializedException
+        self.declare_parameter('air_robots', [], ParameterDescriptor(dynamic_typing=True))
+        self.declare_parameter('air_scan_rate', 2.0)  # Гц на дрона
+        self.declare_parameter('air_obst_h', 0.15)    # h >= этого: занято, м над полом
+        self.declare_parameter('air_free_h', 0.08)    # h <= этого: свободно
+        self.declare_parameter('air_max_h', 3.0)      # точки выше отбрасываем
+        self.declare_parameter('air_max_off_nadir_deg', 35.0)  # конус от вертикали; 0 = весь кадр
+        self.declare_parameter('air_floor_plane', True)  # пол в кадре - плоскость (поправка наклона дрона)
+        self.declare_parameter('free_z_max', 2.5)     # выше этого лидар не режет свободное, м
 
         self.robots = list(self.get_parameter('robots').value)
+        self.air_robots = list(self.get_parameter('air_robots').value or [])
         res = float(self.get_parameter('resolution').value)
         gt = self.get_parameter('gt_file').value
         if gt:
@@ -59,7 +74,17 @@ class SharedMap(Node):
             w, h, res, bounds[0], bounds[1],
             z_min=float(self.get_parameter('z_min').value),
             z_max=float(self.get_parameter('z_max').value),
-            robot_clear=float(self.get_parameter('robot_clear').value))
+            robot_clear=float(self.get_parameter('robot_clear').value),
+            free_z_max=float(self.get_parameter('free_z_max').value))
+        self.air = None
+        if self.air_robots:
+            self.air = AirLayer(
+                w, h, res, bounds[0], bounds[1],
+                obst_h=float(self.get_parameter('air_obst_h').value),
+                free_h=float(self.get_parameter('air_free_h').value),
+                max_h=float(self.get_parameter('air_max_h').value),
+                max_off_nadir_deg=float(self.get_parameter('air_max_off_nadir_deg').value),
+                floor_plane=bool(self.get_parameter('air_floor_plane').value))
         self.get_logger().info(f'карта {w}x{h} клеток, {res} м, origin=({bounds[0]}, {bounds[1]}), роботы: {self.robots}')
 
         self.tf_buffer = Buffer(cache_time=Duration(seconds=20))
@@ -68,6 +93,9 @@ class SharedMap(Node):
         self.pending = {r: None for r in self.robots}
         self.last_proc = {r: -1.0 for r in self.robots}
         self.poses = {}
+        self.drone_poses = {}
+        self.air_pending = {r: None for r in self.air_robots}
+        self.air_last = {r: -1.0 for r in self.air_robots}
         self.offsets = None
         sensor_qos = QoSProfile(depth=2, reliability=ReliabilityPolicy.BEST_EFFORT,
                                 history=HistoryPolicy.KEEP_LAST)
@@ -76,11 +104,25 @@ class SharedMap(Node):
                                      lambda m, r=r: self._on_cloud(r, m), sensor_qos)
             self.create_subscription(Odometry, f'/{r}/pose',
                                      lambda m, r=r: self._on_odom(r, m), 10)
+        # облако глубины дрона ~300 КБ: с BEST_EFFORT под нагрузкой теряются фрагменты DDS
+        # (доходило 1-3 Гц из 5), поэтому RELIABLE
+        air_qos = QoSProfile(depth=2, reliability=ReliabilityPolicy.RELIABLE,
+                             history=HistoryPolicy.KEEP_LAST)
+        for r in self.air_robots:
+            self.create_subscription(PointCloud2, f'/{r}/depth/points',
+                                     lambda m, r=r: self._on_air_cloud(r, m), air_qos)
+            self.create_subscription(Odometry, f'/{r}/pose',
+                                     lambda m, r=r: self._on_drone_odom(r, m), 10)
         map_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              reliability=ReliabilityPolicy.RELIABLE)
         self.pub = self.create_publisher(OccupancyGrid, '/map', map_qos)
         self.create_timer(1.0 / float(self.get_parameter('scan_rate').value) / len(self.robots),
                           self._process)
+        if self.air_robots:
+            self.pub_ground = self.create_publisher(OccupancyGrid, '/map_ground', map_qos)
+            self.pub_air = self.create_publisher(OccupancyGrid, '/map_air', map_qos)
+            self.create_timer(1.0 / float(self.get_parameter('air_scan_rate').value)
+                              / len(self.air_robots), self._process_air)
         self.create_timer(1.0 / float(self.get_parameter('map_rate').value), self._publish)
         self.n_scans = 0
         self.t_cpu = 0.0
@@ -93,6 +135,13 @@ class SharedMap(Node):
     def _on_odom(self, r, msg):
         p = msg.pose.pose.position
         self.poses[r] = (p.x, p.y)
+
+    def _on_drone_odom(self, r, msg):
+        p = msg.pose.pose.position
+        self.drone_poses[r] = (p.x, p.y, p.z)
+
+    def _on_air_cloud(self, r, msg):
+        self.air_pending[r] = msg
 
     def _on_cloud(self, r, msg):
         self.pending[r] = msg
@@ -122,11 +171,59 @@ class SharedMap(Node):
             T[:3, :3] = quat_to_matrix(tf.transform.rotation)
             tr = tf.transform.translation
             T[:3, 3] = (tr.x, tr.y, tr.z)
-            self.up.update(pts, T, [v for k, v in self.poses.items() if k != r], self.poses.get(r))
+            self.up.update(pts, T, [v for k, v in self.poses.items() if k != r], self.poses.get(r),
+                           list(self.drone_poses.values()))
             self.n_scans += 1
             self.t_cpu += time.process_time() - t0
 
+    def _process_air(self):
+        now = self.get_clock().now().nanoseconds * 1e-9
+        min_dt = 1.0 / float(self.get_parameter('air_scan_rate').value)
+        for r in self.air_robots:
+            msg = self.air_pending[r]
+            if msg is None or now - self.air_last[r] < min_dt:
+                continue
+            stamp = Time.from_msg(msg.header.stamp)
+            try:
+                tf = self.tf_buffer.lookup_transform(self.frame, msg.header.frame_id, stamp)
+            except TransformException:
+                if now - stamp.nanoseconds * 1e-9 > 1.5:
+                    self.air_pending[r] = None
+                continue
+            self.air_pending[r] = None
+            self.air_last[r] = now
+            t0 = time.process_time()
+            offs = [next(f.offset for f in msg.fields if f.name == n) for n in ('x', 'y', 'z')]
+            pts = cloud_to_array(msg.data, msg.width, msg.height, msg.point_step, offs)
+            R = quat_to_matrix(tf.transform.rotation)
+            tr = tf.transform.translation
+            flat = pts.reshape(-1, 3).astype(np.float64)
+            world = flat @ R.T + np.array([tr.x, tr.y, tr.z])
+            self.air.update(world, list(self.poses.values()),
+                            [(v[0], v[1]) for k, v in self.drone_poses.items() if k != r],
+                            sensor_xyz=(tr.x, tr.y, tr.z))
+            self.n_scans += 1
+            self.t_cpu += time.process_time() - t0
+
+    def _grid_msg(self, data):
+        m = OccupancyGrid()
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.header.frame_id = self.frame
+        m.info.resolution = self.up.res
+        m.info.width = self.up.w
+        m.info.height = self.up.h
+        m.info.origin.position.x = self.up.ox
+        m.info.origin.position.y = self.up.oy
+        m.info.origin.orientation.w = 1.0
+        m.data = data.tolist()
+        return m
+
     def _publish(self):
+        if self.air is not None:
+            self.pub.publish(self._grid_msg(fuse(self.up, self.air)))
+            self.pub_ground.publish(self._grid_msg(self.up.to_grid_data()))
+            self.pub_air.publish(self._grid_msg(self.air.to_grid_data()))
+            return
         m = OccupancyGrid()
         m.header.stamp = self.get_clock().now().to_msg()
         m.header.frame_id = self.frame

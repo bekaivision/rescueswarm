@@ -27,6 +27,10 @@ services:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       # больше участников DDS на домен: 3 робота с Nav2 дают > 9 процессов
       - CYCLONEDDS_URI=file:///workspace/src/rs_bringup/config/cyclonedds.xml
+      # gz-transport только через loopback. Без этого он объявляет адрес другого интерфейса хоста
+      # (на этой машине tailscale0), и мост /clock иногда не получает время от сервера: все узлы
+      # с use_sim_time стоят. Это же значение нужно PX4 (Фаза 5).
+      - GZ_IP=127.0.0.1
     volumes:
       - ..:/workspace
       - /tmp/.X11-unix:/tmp/.X11-unix:rw

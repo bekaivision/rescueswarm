@@ -28,10 +28,16 @@ LOC       ?= gt
 # OUT=путь в контейнере: другой out_dir для explore/search; EXTRA='perception:=false ...': дополнительные аргументы launch
 OUT       ?=
 EXTRA     ?=
+# Фаза 5: DRONES=M дронов drone_1..M (0 = как в Фазе 4), DBACK=light|px4 бэкенд полёта
+DRONES    ?= 0
+DBACK     ?= light
+DRONEARG  := drones:=$(DRONES) drone_backend:=$(DBACK)
+# видео Фазы 5 снимается с PX4 (VIDEO_DBACK=light - с лёгкими дронами)
+VIDEO_DBACK ?= px4
 # все ROS-команды запускаются после source install/setup.bash
 WS        := source /workspace/install/setup.bash
 
-.PHONY: help image shell deps build test sim sim-headless sim-robots sim-robots-headless explore explore-headless search search-headless teleop check-phase1 check-phase2 check-phase3 check-phase4 eval video slam-smoke
+.PHONY: help image shell deps build test sim sim-headless sim-robots sim-robots-headless explore explore-headless search search-headless teleop check-phase1 check-phase2 check-phase3 check-phase4 check-phase5 px4-smoke eval video slam-smoke
 
 help: ## Показать команды
 	@echo "make image [NOCACHE=1]      собрать образ rescueswarm-dev:jazzy"
@@ -53,9 +59,12 @@ help: ## Показать команды
 	@echo "make check-phase1           скриптовая проверка Фазы 1 (топики, частоты, движение, кадры)"
 	@echo "make check-phase2 [CHECK_SEEDS=\"1 2 3 7\"] [N=3] [MAX_SIM_S=900]  проверка Фазы 2: исследование нескольких seed без человека, результаты в results/phase-2/check/"
 	@echo "make check-phase4 [CHECK_SEEDS=\"1 2 3 7\"] [N=3] [MAX_SIM_S=900] [RGB=1]  проверка Фазы 4: поиск людей на каждом seed с истинной позой (gt) и с mrg_slam (slam), ATE/карта/люди, сводка в results/phase-4/check/summary.md"
+	@echo "  DRONES=2 для explore*/search*: Фаза 5, дроны drone_1..2 (DBACK=light|px4, по умолчанию light)"
+	@echo "make check-phase5 [CHECK_SEEDS=\"1 2 3 7\"] [N=3] [MAX_SIM_S=900] [DRONES=2]  проверка Фазы 5: на каждом seed только наземные роботы и смешанный рой, сводка в results/phase-5/check/summary.md"
+	@echo "make px4-smoke              Фаза 5: два дрона PX4 SITL летят в offboard из ROS 2, результаты в results/phase-5/px4_smoke/"
 	@echo "make eval                   заглушка (появится вместе с rs_eval), завершается с кодом 1"
 	@echo "make check-phase3 [CHECK_SEEDS=\"1 2 3 7\"] [N=3] [MAX_SIM_S=900] [RGB=1]  проверка Фазы 3: поиск людей на нескольких seed, результаты в results/phase-3/check/ (RGB=0: только тепловизор, results/phase-3/check_thermal_only/)"
-	@echo "make video PHASE=<0|1|2|3>  собрать media/phase-N.mp4 (Docker; для фазы 1 нужен экран, для фаз 2 и 3 нет; пересъёмка: RERECORD=1); другие фазы: код 1"
+	@echo "make video PHASE=<0..5>  собрать media/phase-N.mp4 (Docker; для фазы 1 нужен экран, для фаз 2 и 3 нет; пересъёмка: RERECORD=1); другие фазы: код 1"
 
 image:
 	$(COMPOSE) build $(if $(filter 1,$(NOCACHE)),--no-cache,) dev
@@ -89,16 +98,16 @@ sim-robots-headless:
 	$(RUN) --name rescueswarm-robots-headless dev bash -c '$(WS) && ros2 launch rs_bringup robots.launch.py n:=$(N) headless:=true rviz:=false'
 
 explore:
-	$(RUN) --name rescueswarm-explore dev bash -c '$(WS) && ros2 launch rs_bringup explore.launch.py seed:=$(SEED) n:=$(N) headless:=false rviz:=true max_time:=$(MAXTIME) localization:=$(LOC) $(if $(OUT),out_dir:=$(OUT),) $(EXTRA)'
+	$(RUN) --name rescueswarm-explore dev bash -c '$(WS) && ros2 launch rs_bringup explore.launch.py seed:=$(SEED) n:=$(N) headless:=false rviz:=true max_time:=$(MAXTIME) localization:=$(LOC) $(if $(OUT),out_dir:=$(OUT),) $(DRONEARG) $(EXTRA)'
 
 explore-headless:
-	$(RUN) --name rescueswarm-explore-headless dev bash -c '$(WS) && ros2 launch rs_bringup explore.launch.py seed:=$(SEED) n:=$(N) headless:=true rviz:=false max_time:=$(MAXTIME) localization:=$(LOC) $(if $(OUT),out_dir:=$(OUT),) $(EXTRA)'
+	$(RUN) --name rescueswarm-explore-headless dev bash -c '$(WS) && ros2 launch rs_bringup explore.launch.py seed:=$(SEED) n:=$(N) headless:=true rviz:=false max_time:=$(MAXTIME) localization:=$(LOC) $(if $(OUT),out_dir:=$(OUT),) $(DRONEARG) $(EXTRA)'
 
 search:
-	$(RUN) --name rescueswarm-search dev bash -c '$(WS) && ros2 launch rs_bringup explore.launch.py seed:=$(SEED) n:=$(N) headless:=false rviz:=true max_time:=$(MAXTIME) localization:=$(LOC) $(RGBARG) out_dir:=$(if $(OUT),$(OUT),/workspace/results/phase-3/run_seed_$(SEED)$(RGBSUF)) $(EXTRA)'
+	$(RUN) --name rescueswarm-search dev bash -c '$(WS) && ros2 launch rs_bringup explore.launch.py seed:=$(SEED) n:=$(N) headless:=false rviz:=true max_time:=$(MAXTIME) localization:=$(LOC) $(RGBARG) out_dir:=$(if $(OUT),$(OUT),/workspace/results/phase-3/run_seed_$(SEED)$(RGBSUF)) $(DRONEARG) $(EXTRA)'
 
 search-headless:
-	$(RUN) --name rescueswarm-search-headless dev bash -c '$(WS) && ros2 launch rs_bringup explore.launch.py seed:=$(SEED) n:=$(N) headless:=true rviz:=false max_time:=$(MAXTIME) localization:=$(LOC) $(RGBARG) out_dir:=$(if $(OUT),$(OUT),/workspace/results/phase-3/run_seed_$(SEED)$(RGBSUF)) $(EXTRA)'
+	$(RUN) --name rescueswarm-search-headless dev bash -c '$(WS) && ros2 launch rs_bringup explore.launch.py seed:=$(SEED) n:=$(N) headless:=true rviz:=false max_time:=$(MAXTIME) localization:=$(LOC) $(RGBARG) out_dir:=$(if $(OUT),$(OUT),/workspace/results/phase-3/run_seed_$(SEED)$(RGBSUF)) $(DRONEARG) $(EXTRA)'
 
 teleop:
 	$(RUN) dev bash -c '$(WS) && ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/$(ROBOT)/cmd_vel'
@@ -115,6 +124,13 @@ check-phase3:
 check-phase4:
 	SEEDS="$(CHECK_SEEDS)" N="$(N)" MAX_SIM_S="$(MAX_SIM_S)" RGB="$(RGB)" "$(CURDIR)/scripts/check_phase4.sh"
 
+check-phase5:
+	SEEDS="$(CHECK_SEEDS)" N="$(N)" MAX_SIM_S="$(MAX_SIM_S)" DRONES="$(if $(filter 0,$(DRONES)),2,$(DRONES))" DBACK="$(DBACK)" "$(CURDIR)/scripts/check_phase5.sh"
+
+# Фаза 5: PX4 SITL (два дрона, offboard) без нашего мира; нужен install_px4 (px4_msgs, см. deps.repos)
+px4-smoke:
+	"$(CURDIR)/scripts/px4_smoke.sh"
+
 eval:
 	@echo "make eval: пока не реализовано (серии экспериментов появятся в Фазе 7 вместе с rs_eval)." >&2
 	@exit 1
@@ -126,6 +142,7 @@ video:
 	elif [ "$(PHASE)" = 2 ]; then SEED="$(SEED)" "$(CURDIR)/scripts/video/phase2.sh" $(if $(filter 1,$(RERECORD)),--rerecord,); \
 	elif [ "$(PHASE)" = 3 ]; then SEED="$(SEED)" "$(CURDIR)/scripts/video/phase3.sh" $(if $(filter 1,$(RERECORD)),--rerecord,); \
 	elif [ "$(PHASE)" = 4 ]; then SEED="$(SEED)" "$(CURDIR)/scripts/video/phase4.sh" $(if $(filter 1,$(RERECORD)),--rerecord,); \
+	elif [ "$(PHASE)" = 5 ]; then SEED="$(SEED)" DBACK="$(VIDEO_DBACK)" "$(CURDIR)/scripts/video/phase5.sh" $(if $(filter 1,$(RERECORD)),--rerecord,); \
 	else echo "make video PHASE=$(PHASE): пока не реализовано (media/phase-$(PHASE).mp4)." >&2; exit 1; fi
 
 # Фаза 4: mrg_slam на одном роботе (ground_1, Gazebo без окон, истинная поза только для сравнения).

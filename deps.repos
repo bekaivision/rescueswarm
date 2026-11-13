@@ -24,3 +24,10 @@ repositories:
     type: git
     url: https://github.com/aserbremen/ndt_omp
     version: 8cc0e47d1691a7056755cdcc89ebf6fa91d93d02   # master
+  # Фаза 5: сообщения PX4 для ROS 2. Версия должна совпадать с PX4_VERSION в docker/Dockerfile:
+  # менять обе только вместе (иначе топики видны, но данные молча теряются).
+  # Хэш - коммит, на который указывает аннотированный тег v1.17.0 (сам объект тега: 35a005a8...).
+  px4_msgs:
+    type: git
+    url: https://github.com/PX4/px4_msgs.git
+    version: 86d8239e962f6939e05c3737784f60c02fa884db   # тег v1.17.0
