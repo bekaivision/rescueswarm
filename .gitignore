@@ -29,3 +29,8 @@ log_slam/
 build_px4/
 install_px4/
 log_px4/
+
+# Фаза 6: отдельные сборки рабочих пакетов
+build_p6/
+install_p6/
+log_p6/

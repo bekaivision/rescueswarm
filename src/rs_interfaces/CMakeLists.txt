@@ -11,6 +11,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RgbDetection.msg"
   "msg/PersonMark.msg"
   "msg/PersonMarkArray.msg"
+  "msg/CommsPacket.msg"
+  "msg/MapLayer.msg"
+  "msg/ObsBatch.msg"
+  "msg/CommsBeacon.msg"
   DEPENDENCIES std_msgs geometry_msgs builtin_interfaces)
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

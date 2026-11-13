@@ -10,6 +10,12 @@ air_robots (дроны, по умолчанию пусто; Фаза 5).
 сообщили все наземные explorer (/exploration/bids) и все воздушные (/exploration/air_bids) и это держится
 done_hold с. С пустым air_robots все файлы и поведение прежние.
 
+Режим связи (Фаза 6, comms=true): флаги done берутся из личных топиков /<r>/exploration/bids и
+/<d>/exploration/air_bids; подписка на /map_collective (идеальная карта, только оценка): столбец
+coverage_collective последним в coverage.csv и final_map_collective.npy. Завершение "все done"
+дополнительно ждёт синхронизации: база (/map) догнала коллективную карту (sync_tol) или прошло
+sync_timeout с. сим. времени с момента, когда все done.
+
 Позы: /<robot>/pose (мировая поза, которой пользуются все; в режиме gt = истинная) и /<robot>/gt_odom
 (истинная, только для оценки). Файлы в out_dir:
   trajectories.csv     robot,x,y         - траектория по pose (прореженная, шаг > 0.1 м)
@@ -36,6 +42,21 @@ from std_msgs.msg import Float32
 from rs_eval import plots
 
 
+def sync_wait_decision(base_cov, coll_cov, waited, tol, timeout):
+    """Ждать ли синхронизации базы с коллективной картой: (можно_завершать, причина). Чистая функция."""
+    if base_cov >= coll_cov - tol:
+        return True, 'synced'
+    if waited >= timeout:
+        return True, 'timeout'
+    return False, 'waiting'
+
+
+def version_sync_ok(target, base_map, base_obs):
+    """База догнала источники: для каждого источника s её версия карты и номер пачки наблюдений
+    не меньше, чем были у самого s в начале ожидания. target: {s: (map_have, obs_have)}. Чистая функция."""
+    return all(base_map.get(s, 0) >= m and base_obs.get(s, 0) >= o for s, (m, o) in target.items())
+
+
 def load_mask(mask_dir):
     """Маска (h, w) bool, низ карты = строка 0, как в OccupancyGrid; плюс origin и resolution."""
     with open(os.path.join(mask_dir, 'coverage_mask.yaml')) as f:
@@ -58,10 +79,18 @@ class Coverage(Node):
         P('search_wait', False)   # не завершать по покрытию, пока есть открытые кандидаты-люди (Фаза 3)
         P('search_hold', 3.0)     # сек. сим. времени "нет открытых кандидатов" подряд
         P('done_hold', 5.0)   # сек. сим. времени, которые все explorer должны держать done
+        P('comms', False)         # Фаза 6: связь через радио, done из личных топиков, карта /map_collective
+        P('sync_tol', 0.005)      # допуск отставания базы от коллективной карты (доля покрытия)
+        P('sync_timeout', 120.0)  # макс. ожидание синхронизации, сим. с
         # дроны; динамический тип: пустой список по умолчанию (иначе rclpy не выводит тип пустого массива)
         self.declare_parameter('air_robots', [], ParameterDescriptor(dynamic_typing=True))
         self.robots = list(self.get_parameter('robots').value)
         self.air = list(self.get_parameter('air_robots').value or [])
+        self.comms = bool(self.get_parameter('comms').value)
+        self.cov_coll = 0.0
+        self.data_coll = None
+        self.sync_start = None
+        self.sync_logged = False
         self.out_dir = self.get_parameter('out_dir').value
         os.makedirs(self.out_dir, exist_ok=True)
         self.mask, self.res, self.ox, self.oy = load_mask(self.get_parameter('mask_dir').value)
@@ -93,21 +122,36 @@ class Coverage(Node):
         self.f = open(self.csv_path, 'w', newline='')
         self.w = csv.writer(self.f)
         self.w.writerow(['sim_time_s', 'coverage', 'n_known', 'n_mask'] + [f'dist_{r}' for r in self.robots]
-                        + (['cov_ground', 'cov_air'] if self.air else []))
+                        + (['cov_ground', 'cov_air'] if self.air else [])
+                        + (['coverage_collective'] if self.comms else []))
         qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                          reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(OccupancyGrid, '/map', self._on_map, qos)
         for r in self.robots:
             self.create_subscription(Odometry, f'/{r}/pose', lambda m, r=r: self._on_odom(r, m), 10)
             self.create_subscription(Odometry, f'/{r}/gt_odom', lambda m, r=r: self._on_gt(r, m), 10)
-        self.create_subscription(ExplorationBid, '/exploration/bids', self._on_bid, 20)
+        if self.comms:
+            self.create_subscription(OccupancyGrid, '/map_collective', self._on_collective, qos)
+            # что есть у каждого узла сети (агенты публишат локально; оценке это видно, роботам нет)
+            from rs_interfaces.msg import CommsBeacon
+            self.have = {}
+            for n in list(self.robots) + list(self.air) + ['base']:
+                self.create_subscription(CommsBeacon, f'/{n}/comms/have', self._on_have, 5)
+            for r in self.robots:
+                self.create_subscription(ExplorationBid, f'/{r}/exploration/bids', self._on_bid, 20)
+        else:
+            self.create_subscription(ExplorationBid, '/exploration/bids', self._on_bid, 20)
         if self.air:
             self.create_subscription(OccupancyGrid, '/map_ground', lambda m: self._on_layer('ground', m), qos)
             self.create_subscription(OccupancyGrid, '/map_air', lambda m: self._on_layer('air', m), qos)
             for r in self.air:
                 self.create_subscription(Odometry, f'/{r}/pose', lambda m, r=r: self._log_pose(r, 'pose', m), 10)
                 self.create_subscription(Odometry, f'/{r}/gt_odom', lambda m, r=r: self._log_pose(r, 'gt', m), 10)
-            self.create_subscription(ExplorationBid, '/exploration/air_bids', self._on_air_bid, 20)
+            if self.comms:
+                for r in self.air:
+                    self.create_subscription(ExplorationBid, f'/{r}/exploration/air_bids', self._on_air_bid, 20)
+            else:
+                self.create_subscription(ExplorationBid, '/exploration/air_bids', self._on_air_bid, 20)
         self.pub = self.create_publisher(Float32, '/coverage', 1)
         self.create_timer(1.0, self._tick)
         self.get_logger().info(f'маска: {self.n_mask} клеток ({self.n_mask * self.res ** 2:.1f} м2), цель {self.target:.0%}')
@@ -124,6 +168,26 @@ class Coverage(Node):
         self.data = d
         self.n_known = int(((d >= 0) & self.mask).sum())
         self.cov = self.n_known / max(self.n_mask, 1)
+
+    def _on_have(self, b):
+        self.have[b.node] = (dict(zip(b.map_sources, (int(v) for v in b.map_versions))),
+                             dict(zip(b.obs_sources, (int(v) for v in b.obs_seqs))))
+
+    def _sync_target(self):
+        """Что каждый робот и дрон знает о себе сейчас: (своя версия карты, свой номер пачки)."""
+        out = {}
+        for s in list(self.robots) + list(self.air):
+            if s in self.have:
+                m, o = self.have[s]
+                out[s] = (m.get(s, 0), o.get(s, 0))
+        return out
+
+    def _on_collective(self, msg):
+        """Идеальная карта (все слои слиты): покрытие по той же маске, только для оценки."""
+        d = np.asarray(msg.data, dtype=np.int8).reshape(msg.info.height, msg.info.width)
+        if d.shape == self.mask.shape:
+            self.data_coll = d
+            self.cov_coll = int(((d >= 0) & self.mask).sum()) / max(self.n_mask, 1)
 
     def _on_layer(self, name, msg):
         """Покрытие слоя карты: та же формула, что у coverage (известные клетки в маске / клеток маски)."""
@@ -177,7 +241,8 @@ class Coverage(Node):
         self.pub.publish(Float32(data=float(self.cov)))
         self.w.writerow([f'{ts:.1f}', f'{self.cov:.5f}', self.n_known, self.n_mask]
                         + [f'{self.dist[r]:.2f}' for r in self.robots]
-                        + ([f'{self.cov_layers["ground"]:.5f}', f'{self.cov_layers["air"]:.5f}'] if self.air else []))
+                        + ([f'{self.cov_layers["ground"]:.5f}', f'{self.cov_layers["air"]:.5f}'] if self.air else [])
+                        + ([f'{self.cov_coll:.5f}'] if self.comms else []))
         self.f.flush()
         self.pose_log.flush()
         # все explorer сообщили done и держат это
@@ -206,12 +271,36 @@ class Coverage(Node):
             gave = sorted({g for v in self.bids_open.values() for g in v[2]})
             self.get_logger().info(f'SEARCH COMPLETE t={ts:.1f}: открытых кандидатов нет, оставлено: {gave or "нет"}')
         held = self.done_since is not None and t - self.done_since >= float(self.get_parameter('done_hold').value)
+        # причина завершения без учёта связи (как в Фазе 5)
+        why = None
         if self.cov >= self.target and search_ok and (held or not self.air):
-            self._finish(ts, f'покрытие {self.cov:.1%} >= {self.target:.0%}')
-        elif self.done_since is not None and search_ok and \
-                t - self.done_since >= float(self.get_parameter('done_hold').value):
-            self._finish(ts, 'все explorer сообщили done')
-        elif self.max_time > 0 and ts >= self.max_time:
+            why = f'покрытие {self.cov:.1%} >= {self.target:.0%}'
+        elif self.done_since is not None and search_ok and held:
+            why = 'все explorer сообщили done'
+        # режим связи: перед завершением ждём, пока база получит всё, что роботы знали в этот момент
+        # (версии слоёв карты и пачки наблюдений каждого источника), не дольше sync_timeout
+        if why and self.comms:
+            if self.sync_start is None:
+                self.sync_start = t
+                self.sync_target = self._sync_target()
+                self.get_logger().info(f'SYNC: можно завершать ({why}), ждём, пока база получит данные роботов: {self.sync_target}')
+            bm, bo = self.have.get('base', ({}, {}))
+            if version_sync_ok(self.sync_target, bm, bo):
+                sync_why = 'synced'
+            elif t - self.sync_start >= float(self.get_parameter('sync_timeout').value):
+                sync_why = 'timeout'
+            else:
+                sync_why = None     # ждём дальше (max_time ниже всё равно действует)
+            if sync_why:
+                self.get_logger().info(
+                    f'SYNC: конец ожидания ({sync_why}), ждали {t - self.sync_start:.0f} с, '
+                    f'база {100 * self.cov:.1f} %, коллективно {100 * self.cov_coll:.1f} %')
+                self._finish(ts, why)
+        elif why:
+            self._finish(ts, why)
+        elif self.comms:
+            self.sync_start = None
+        if not self.finished and self.max_time > 0 and ts >= self.max_time:
             self._finish(ts, 'достигнут max_time')
 
     def _finish(self, ts, reason):
@@ -234,6 +323,8 @@ class Coverage(Node):
                                 'origin': [float(self.ox), float(self.oy), 0.0],
                                 'shape_hw': [int(self.data.shape[0]), int(self.data.shape[1])],
                                 'row0': 'bottom'}, f)
+        if self.comms and self.data_coll is not None:
+            np.save(os.path.join(self.out_dir, 'final_map_collective.npy'), self.data_coll)
         # слои воздух/земля в той же сетке (origin и resolution как у final_map.yaml)
         for name, d in self.layer_data.items():
             np.save(os.path.join(self.out_dir, f'final_map_{name}.npy'), d)

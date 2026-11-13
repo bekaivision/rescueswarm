@@ -2,6 +2,10 @@
 
 Публикует /people/marks (1 Гц), /people/markers (MarkerArray), /people/inspect_requests
 (кандидаты без достаточного числа близких наблюдений). Пишет people.json в out_dir.
+
+Режим связи (Фаза 6): при obs_topic != '' узел не читает /fleet/poses и детекции напрямую, а берёт
+пакеты ObsBatch (виды, термо- и RGB-детекции в порядке времени). map_topic и people_ns задают карту
+и пространство имён выходных топиков (по умолчанию /map и /people). Без obs_topic всё как раньше.
 """
 import json
 import math
@@ -14,7 +18,7 @@ from nav_msgs.msg import OccupancyGrid
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from rs_interfaces.msg import PersonMark, PersonMarkArray, RgbDetection, ThermalDetection
+from rs_interfaces.msg import ObsBatch, PersonMark, PersonMarkArray, RgbDetection, ThermalDetection
 from visualization_msgs.msg import Marker, MarkerArray
 
 from rs_perception import marks as M
@@ -36,6 +40,9 @@ class PeopleFusion(Node):
         self.declare_parameter('robots', ['ground_1', 'ground_2', 'ground_3'])
         # дроны (Фаза 5); dynamic_typing: пустой список из launch не имеет типа
         self.declare_parameter('air_robots', [], ParameterDescriptor(dynamic_typing=True))
+        self.declare_parameter('obs_topic', '')       # '' = старый режим (прямые топики)
+        self.declare_parameter('map_topic', '/map')
+        self.declare_parameter('people_ns', '/people')
         params = {k: self.get_parameter(k).value for k in M.DEFAULTS}
         self.fusion = M.Fusion(params, list(self.get_parameter('air_robots').value or []))
         self.out_dir = self.get_parameter('out_dir').value
@@ -45,14 +52,20 @@ class PeopleFusion(Node):
         map_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              reliability=ReliabilityPolicy.RELIABLE)
         self.robots = list(self.get_parameter('robots').value)
-        self.create_subscription(OccupancyGrid, '/map', self._on_map, map_qos)
-        self.create_subscription(PoseArray, '/fleet/poses', self._on_poses, 5)
-        self.create_subscription(ThermalDetection, '/perception/detections', self._on_det, 50)
-        self.create_subscription(RgbDetection, '/perception/rgb_detections', self._on_rgb, 50)
+        self.obs_topic = self.get_parameter('obs_topic').value
+        ns = self.get_parameter('people_ns').value.rstrip('/')
+        self.create_subscription(OccupancyGrid, self.get_parameter('map_topic').value, self._on_map, map_qos)
+        if self.obs_topic:
+            obs_qos = QoSProfile(depth=200, reliability=ReliabilityPolicy.RELIABLE)
+            self.create_subscription(ObsBatch, self.obs_topic, self._on_batch, obs_qos)
+        else:
+            self.create_subscription(PoseArray, '/fleet/poses', self._on_poses, 5)
+            self.create_subscription(ThermalDetection, '/perception/detections', self._on_det, 50)
+            self.create_subscription(RgbDetection, '/perception/rgb_detections', self._on_rgb, 50)
         self.poses = {}     # робот -> (x, y, yaw) последняя поза
-        self.pub_marks = self.create_publisher(PersonMarkArray, '/people/marks', 5)
-        self.pub_markers = self.create_publisher(MarkerArray, '/people/markers', 5)
-        self.pub_insp = self.create_publisher(PersonMarkArray, '/people/inspect_requests', 5)
+        self.pub_marks = self.create_publisher(PersonMarkArray, f'{ns}/marks', 5)
+        self.pub_markers = self.create_publisher(MarkerArray, f'{ns}/markers', 5)
+        self.pub_insp = self.create_publisher(PersonMarkArray, f'{ns}/inspect_requests', 5)
         self.create_timer(1.0, self._tick)
         self.n_det = 0
         self.ticks = 0
@@ -91,13 +104,43 @@ class PeopleFusion(Node):
             if not math.isfinite(p.position.x):
                 continue
             yaw = math.atan2(2 * p.orientation.z * p.orientation.w, 1 - 2 * p.orientation.z ** 2)
-            self.poses[rid] = (p.position.x, p.position.y, yaw)
-            for m in self.fusion.observe_view(rid, p.position.x, p.position.y, yaw, t, self._los):
-                self.get_logger().info(
-                    f'{m.id} -> REJECTED (not_seen_close) at ({m.x:.2f}, {m.y:.2f}) n={m.n_obs} close={m.n_close}')
-                self._write_json()
+            self._view(rid, p.position.x, p.position.y, yaw, t)
+
+    def _view(self, rid, x, y, yaw, t):
+        """Вид робота (поза и время): запомнить позу и отклонить кандидатов, которых отсюда не видно."""
+        self.poses[rid] = (x, y, yaw)
+        for m in self.fusion.observe_view(rid, x, y, yaw, t, self._los):
+            self.get_logger().info(
+                f'{m.id} -> REJECTED (not_seen_close) at ({m.x:.2f}, {m.y:.2f}) n={m.n_obs} close={m.n_close}')
+            self._write_json()
+
+    def _on_batch(self, b):
+        """Пакет наблюдений робота (режим связи): виды, термо- и RGB-детекции по порядку времени."""
+        items = []
+        for i, t in enumerate(b.view_t):
+            items.append((float(t), 0, i))
+        for i, d in enumerate(b.detections):
+            items.append((d.header.stamp.sec + d.header.stamp.nanosec * 1e-9, 1, i))
+        for i, d in enumerate(b.rgb):
+            items.append((d.header.stamp.sec + d.header.stamp.nanosec * 1e-9, 2, i))
+        items.sort()
+        rx = round(self._now(), 2)
+        for t, kind, i in items:
+            if kind == 0:
+                if b.robot in self.robots:
+                    self._view(b.robot, float(b.view_pose[3 * i]), float(b.view_pose[3 * i + 1]),
+                               float(b.view_pose[3 * i + 2]), t)
+            elif kind == 1:
+                self._handle_det(b.detections[i], rx)
+            else:
+                pose = tuple(float(v) for v in b.rgb_pose[3 * i:3 * i + 3])
+                self._handle_rgb(b.rgb[i], pose, rx)
 
     def _on_det(self, d):
+        self._handle_det(d, None)
+
+    def _handle_det(self, d, rx):
+        """Термо-детекция; rx (сим. время получения) пишется в журнал только в режиме связи."""
         t = d.header.stamp.sec + d.header.stamp.nanosec * 1e-9
         m, changed = self.fusion.update(d.position.x, d.position.y, d.robot, d.range_m,
                                         d.mean_temp_k, d.height_m, d.length_m, t)
@@ -107,7 +150,8 @@ class PeopleFusion(Node):
             self.det_log.write(json.dumps(dict(
                 t=round(t, 2), robot=d.robot, x=round(d.position.x, 3), y=round(d.position.y, 3),
                 range=round(d.range_m, 2), temp=round(d.mean_temp_k, 2), max_temp=round(d.max_temp_k, 2),
-                px=d.blob_px, h=nz(d.height_m), len=nz(d.length_m), n_pts=d.n_lidar_pts, pad=d.lidar_pad, bw=d.blob_w_px, bh=d.blob_h_px, mark=m.id)) + '\n')
+                px=d.blob_px, h=nz(d.height_m), len=nz(d.length_m), n_pts=d.n_lidar_pts, pad=d.lidar_pad, bw=d.blob_w_px, bh=d.blob_h_px, mark=m.id,
+                **({} if rx is None else dict(rx=rx)))) + '\n')
             if self.n_det % 20 == 0:
                 self.det_log.flush()
         if changed:
@@ -117,7 +161,10 @@ class PeopleFusion(Node):
             self._write_json()
 
     def _on_rgb(self, d):
-        pose = self.poses.get(d.robot)
+        self._handle_rgb(d, self.poses.get(d.robot), None)
+
+    def _handle_rgb(self, d, pose, rx):
+        """RGB-детекция с позой робота на момент кадра; rx как у _handle_det."""
         if pose is None:
             return
         t = d.header.stamp.sec + d.header.stamp.nanosec * 1e-9
@@ -128,7 +175,8 @@ class PeopleFusion(Node):
         if self.rgb_log:
             self.rgb_log.write(json.dumps(dict(
                 t=round(t, 2), robot=d.robot, bearing=round(d.bearing_rad, 3), half_w=round(d.half_width_rad, 3),
-                score=round(d.score, 3), mark=m.id if m else None)) + '\n')
+                score=round(d.score, 3), mark=m.id if m else None,
+                **({} if rx is None else dict(rx=rx)))) + '\n')
             if self.n_rgb % 20 == 0:
                 self.rgb_log.flush()
         if m is not None and was.get(m.id) != m.status:

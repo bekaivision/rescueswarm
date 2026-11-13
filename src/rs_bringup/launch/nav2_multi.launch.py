@@ -10,11 +10,13 @@ from launch.substitutions import LaunchConfiguration
 
 def launch_setup(context):
     n = int(LaunchConfiguration('n').perform(context))
+    map_topic = LaunchConfiguration('map_topic').perform(context)
     path = os.path.join(get_package_share_directory('rs_bringup'), 'launch', 'nav2.launch.py')
     # новый источник на каждого робота: иначе описание кэшируется и действия запускаются дважды
     return [IncludeLaunchDescription(PythonLaunchDescriptionSource(path), launch_arguments={
         'namespace': f'ground_{i}',
-        'map_topic': LaunchConfiguration('map_topic').perform(context),
+        # '{ns}' в теме карты заменяется именем робота (режим связи: у каждого своя карта /<ns>/map)
+        'map_topic': map_topic.format(ns=f'ground_{i}') if '{ns}' in map_topic else map_topic,
         'params_file': LaunchConfiguration('params_file').perform(context),
     }.items()) for i in range(1, n + 1)]
 

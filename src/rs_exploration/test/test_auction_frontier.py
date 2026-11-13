@@ -94,3 +94,43 @@ def test_giveup_noreach_and_open_too_long():
     # слишком давно открыт, не цель
     assert [k for k, _ in g3.update(301.0, ['d'], {'d'})] == ['d']
     assert g3.update(301.0, ['c'], {'c'}, goal_key='c') == []
+
+
+def test_make_key_roundtrip():
+    k = auction.make_key('mark_3', 1.234, -5.0)
+    assert k == 'mark_3@1.23,-5.00'
+    assert auction.key_pos(k) == (1.23, -5.0)
+    assert auction.key_local_id(k) == 'mark_3'
+    assert auction.key_pos('mark_3') is None
+
+
+def test_assign_key_radius_same_person_different_ids():
+    # один человек: у роботов разные id метки, но позиции рядом
+    bids = {
+        'ground_1': [(-990.0, 0.0, 0.0, auction.make_key('mark_3', 5.0, 5.0))],
+        'ground_2': [(-980.0, 1.0, 1.0, auction.make_key('mark_7', 5.3, 5.1))],
+    }
+    assert list(auction.assign(bids, 2.5, key_radius=1.2)) == ['ground_1']
+    # без радиуса ключи разные: поведение как раньше, едут оба
+    assert sorted(auction.assign(bids, 2.5)) == ['ground_1', 'ground_2']
+    assert sorted(auction.assign(bids, 2.5, key_radius=0.0)) == ['ground_1', 'ground_2']
+
+
+def test_assign_key_radius_far_keys_do_not_conflict():
+    bids = {
+        'ground_1': [(-990.0, 0.0, 0.0, auction.make_key('mark_1', 5.0, 5.0))],
+        'ground_2': [(-980.0, 1.0, 1.0, auction.make_key('mark_1', 9.0, -3.0))],
+    }
+    assert sorted(auction.assign(bids, 2.5, key_radius=1.2)) == ['ground_1', 'ground_2']
+
+
+def test_assign_key_radius_bare_keys_use_equality():
+    bids = {'ground_1': [(1.0, 0.0, 0.0, 'mark_1')], 'ground_2': [(2.0, 9.0, 9.0, 'mark_1')]}
+    assert list(auction.assign(bids, 2.5, key_radius=1.2)) == ['ground_1']
+
+
+def test_need_home():
+    args = dict(done=True, has_goal=False, homing=False, reached=False, fails=0, retries=3, dist=5.0, tol=0.8)
+    assert auction.need_home(**args)
+    for k, v in (('done', False), ('has_goal', True), ('homing', True), ('reached', True), ('fails', 3), ('dist', 0.5)):
+        assert not auction.need_home(**{**args, k: v})

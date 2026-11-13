@@ -33,6 +33,9 @@
 | `make check-phase5 [CHECK_SEEDS="1 2 3 7"] [MAX_SIM_S=900] [DRONES=2] [DBACK=light\|px4] [MODES="ground mixed"]` | скриптовая проверка Фазы 5: на каждом seed только наземные роботы и смешанный рой, сводка в `results/phase-5/check/summary.md` (`DBACK=px4`: `results/phase-5/check_px4/`) |
 | `make px4-smoke` | Фаза 5: два дрона PX4 SITL в мире PX4 летят квадрат в offboard из ROS 2, результаты в `results/phase-5/px4_smoke/` (нужен `install_px4` с `px4_msgs`) |
 | `make video PHASE=5 [SEED=1] [RERECORD=1] [VIDEO_DBACK=px4\|light]` | Видео Фазы 5 в `media/phase-5.mp4` (`scripts/video/phase5.sh`; сырьё в `media/raw/phase-5/`; запись прогона смешанного роя с PX4, ~5-10 мин) |
+| `make explore\|search[-headless] COMMS=ideal\|good\|medium\|poor [OUTAGES='ground_1:60:200']` | Фаза 6: обмен между роботами только через `comms_sim` (дальность, стены, полоса, потери, задержка; `OUTAGES` - полные обрывы узлов по сим. времени); у каждого робота своя карта и своё слияние отметок, база `base` у входа = то, что видит спасатель (`/map`, `/people/*`) |
+| `make check-phase6 [CHECK_SEEDS="1 2 3 7"] [LEVELS="ideal good medium poor"] [MAX_SIM_S=900] [OUTAGE=1]` | скриптовая проверка Фазы 6: смешанный рой (2 лёгких дрона) на каждом уровне связи + тест обрыва связи ground_1 (только наземные), сводка в `results/phase-6/check/summary.md` |
+| `make video PHASE=6 [SEED=1] [RERECORD=1]` | Видео Фазы 6 в `media/phase-6.mp4` (`scripts/video/phase6.sh`: обрыв связи ground_1 60-200 с, карта базы против карты робота) |
 | `make sim [WORLD=file.sdf]` | Gazebo с окном, по умолчанию `shapes.sdf` |
 | `make sim-headless` | Gazebo без окна на `configs/worlds/phase0_bench.sdf` |
 | `make video PHASE=0` | Видео Фазы 0 в `media/phase-0.mp4` (`scripts/video/phase0.sh`; кадры в `media/raw/phase-0/`, `--rerecord` снимает заново) |
@@ -40,7 +43,9 @@
 | `make video PHASE=2 [SEED=1] [RERECORD=1]` | Видео Фазы 2 в `media/phase-2.mp4` (`scripts/video/phase2.sh`; сырьё в `media/raw/phase-2/`: запись headless-прогона + кадры рисуются из неё, экран не нужен; из кэша собирается за ~1 мин, `RERECORD=1` пишет прогон заново, ~5 мин) |
 | `make video PHASE=3 [SEED=1] [RERECORD=1]` | Видео Фазы 3 в `media/phase-3.mp4` (`scripts/video/phase3.sh`; сырьё в `media/raw/phase-3/`: запись headless-прогона поиска (карта, отметки, тепловые кадры) + кадры рисуются из неё, экран не нужен; из кэша ~1-2 мин, `RERECORD=1` пишет прогон заново, ~5-8 мин) |
 | `make video PHASE=4 [SEED=1] [RERECORD=1]` | Видео Фазы 4 в `media/phase-4.mp4` (gt против slam; `RERECORD=1` пишет заново) |
-| `make eval`, `make video PHASE=<n>` (n>5) | Заглушки (код 1), реализация позже |
+| `make eval`, `make video PHASE=<n>` (n>6) | Заглушки (код 1), реализация позже |
+
+Фаза 6: пакет `rs_comms` (`comms_sim`, агент связи `onboard` на каждом узле), оценка `scripts/phase6_eval.py <каталог прогона>`, сводка `scripts/phase6_summary.py <каталог> "1 2 3 7" "ideal good medium poor"` (хост, stdlib + numpy). Отчёт: [docs/PHASE_6_REPORT.md](docs/PHASE_6_REPORT.md). С `comms:=false` (по умолчанию) всё как в Фазе 5.
 
 Фаза 5: оценка слоёв карты `scripts/layers_eval.py <каталог прогона>` (RQ3: сдвиг воздушного слоя
 относительно наземного), сводка `scripts/phase5_summary.py <каталог> "1 2 3 7"` (хост, stdlib + numpy).

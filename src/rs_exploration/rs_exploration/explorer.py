@@ -32,6 +32,7 @@ from lifecycle_msgs.srv import GetState
 from nav2_msgs.action import NavigateToPose
 from nav2_msgs.srv import ManageLifecycleNodes
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -91,6 +92,14 @@ class Explorer(Node):
         P('inspect_noreach_s', 60.0)   # кандидат без достижимой точки осмотра дольше этого -> оставлен (даже при фронтирах)
         P('inspect_max_open_s', 300.0)  # кандидат открыт дольше этого (с первой заявки), не осматривается сейчас -> оставлен
         P('auction_delay', 0.3)       # аукцион через столько после публикации ставок: у всех свежая таблица
+        # режим связи (Фаза 6): у каждого робота свой people_fusion, id меток локальные
+        P('global_keys', False)       # ключи осмотра = id@x,y: одна и та же метка у разных роботов узнаётся по месту
+        P('key_match_m', 1.2)         # ключи/кандидаты ближе этого считаются одним человеком
+        # возврат на базу, когда всё исследовано
+        P('home_on_done', False)
+        P('home', [], ParameterDescriptor(dynamic_typing=True))   # [x, y, yaw] базы
+        P('home_tol', 0.8)
+        P('home_retries', 3)
 
         self.me = self.get_parameter('robot_id').value
         self.idx = int(self.me.split('_')[-1])
@@ -125,6 +134,19 @@ class Explorer(Node):
         self.insp_block = {}     # id -> до какого времени этот робот не берёт кандидата
         self.insp_bearings = {}  # id -> стороны, откуда уже смотрели
         self.gave_local = set()
+        self.gave_pos = {}       # id -> (x, y) кандидата на момент отказа (для глобальных ключей)
+        self.global_keys = bool(self.get_parameter('global_keys').value)
+        self.key_match = float(self.get_parameter('key_match_m').value)
+        # возврат на базу: отдельное состояние, не цель аукциона
+        self.homing = False
+        self.home_gid = 0
+        self.home_handle = None
+        self.home_fail = 0
+        self.home_reached = False
+        self.home_gave_up = False
+        self.home_retry_at = 0.0
+        self.home_t0 = 0.0
+        self.home_progress = None
         self.giveup = inspection.GiveUp(float(self.get_parameter('inspect_noreach_s').value),
                                         float(self.get_parameter('inspect_max_open_s').value))
         self.req_ignore = {}     # id -> заявки со штампом не позже этого времени устарели (осмотр закончен)
@@ -263,8 +285,15 @@ class Explorer(Node):
         # проверка текущей цели
         self._check_goal(an, now)
         self.gave_all = set(self.gave_local)
-        for _, msg in self.table.values():
-            self.gave_all.update(msg.gave_up)
+        if self.global_keys:
+            # чужие отказы приходят как id@x,y: сравниваем по месту, а не по чужому id
+            foreign = [kp for _, msg in self.table.values() for kp in map(auction.key_pos, msg.gave_up) if kp]
+            for rid, (qx, qy) in self.requests.items():
+                if any(math.hypot(qx - fx, qy - fy) < self.key_match for fx, fy in foreign):
+                    self.gave_all.add(rid)
+        else:
+            for _, msg in self.table.values():
+                self.gave_all.update(msg.gave_up)
         self.open_ids = [k for k in self.requests if k not in self.gave_all]
 
         # кандидаты
@@ -308,7 +337,12 @@ class Explorer(Node):
             if self.done:
                 self.done = False
                 self.get_logger().info('фронтиры появились снова: продолжаем')
+                self._cancel_home()
+                self.home_reached = False
+                self.home_gave_up = False
+                self.home_fail = 0
 
+        self._home_step(now)
         self._publish_bid(top)
         self._publish_markers(an, cands)
 
@@ -324,12 +358,12 @@ class Explorer(Node):
 
     def _auction(self):
         top, now = self.top, self._now()
-        table = {self.me: [(c, x, y, k) for c, x, y, _, k in top]}
+        table = {self.me: [(c, x, y, self._gkey(k)) for c, x, y, _, k in top]}
         for rid, (_, msg) in self.table.items():
             ids = list(msg.target_ids) + [''] * len(msg.targets)
             table[rid] = [(float(c), p.x, p.y, k) for c, p, k in zip(msg.costs, msg.targets, ids)]
-        self.my_keys = {(x, y): k for _, x, y, _, k in top}
-        res = auction.assign(table, self.R)
+        self.my_keys = {(x, y): k for _, x, y, _, k in top}   # локальные id: по позиции цели находим свой id
+        res = auction.assign(table, self.R, self.key_match if self.global_keys else 0.0)
         self.round += 1
         desc = ' '.join(f'{rid[-1]}->({x:.1f},{y:.1f})c{c:.1f}' for rid, (x, y, c) in sorted(res.items()))
         mine = res.get(self.me)
@@ -524,9 +558,21 @@ class Explorer(Node):
         self.open_ids = [k for k in self.open_ids if k not in self.gave_local]
         return out
 
+    def _mark_gave(self, key):
+        """Кандидат оставлен: запоминаем и позицию (для глобального ключа в ставках)."""
+        self.gave_local.add(key)
+        if key in self.requests:
+            self.gave_pos[key] = self.requests[key]
+
+    def _gkey(self, key):
+        """Ключ для ставок: в глобальном режиме id@x,y по позиции кандидата, иначе локальный id."""
+        if not key or not self.global_keys or key not in self.requests:
+            return key
+        return auction.make_key(key, *self.requests[key])
+
     def _inspect_giveup(self, key, why):
         if key not in self.gave_local:
-            self.gave_local.add(key)
+            self._mark_gave(key)
             self.get_logger().warn(f'кандидат {key} оставлен: {why}')
 
     def _inspect_fail(self, key, why, cooldown=None):
@@ -537,7 +583,7 @@ class Explorer(Node):
         self.insp_block[key] = now + (float(gp('inspect_cooldown').value) if cooldown is None else cooldown)
         self.get_logger().warn(f'осмотр {key} не удался ({why}), неудач {n}/{int(gp("inspect_max_fails").value)}')
         if n >= int(gp('inspect_max_fails').value) and key not in self.gave_local:
-            self.gave_local.add(key)
+            self._mark_gave(key)
             self.get_logger().warn(f'кандидат {key} оставлен после {n} неудач осмотра')
 
     def _check_inspect_goal(self, now):
@@ -698,6 +744,11 @@ class Explorer(Node):
         fut.add_done_callback(done)
 
     def _send_goal(self, x, y, key=''):
+        if self.homing:
+            # обычная цель вытесняет домашнюю в Nav2; результат домашней больше не нужен
+            self.homing = False
+            self.home_gid += 1
+            self.home_handle = None
         self.goal_id += 1
         self.insp = None
         gid = self.goal_id
@@ -776,6 +827,115 @@ class Explorer(Node):
         self.goal_handle = None
         self.goal_id += 1   # результат отменённой цели игнорируем
 
+    # --- возврат на базу -------------------------------------------------------
+    def _home_pose(self):
+        h = self.get_parameter('home').value
+        if h is None or len(h) < 2:
+            return None
+        return float(h[0]), float(h[1]), float(h[2]) if len(h) > 2 else 0.0
+
+    def _cancel_home(self):
+        """Отмена домашней цели (отложенная, как у обычной: если сразу пойдёт новая, Nav2 вытеснит сам)."""
+        if not self.homing:
+            return
+        if self.home_handle is not None:
+            self.stale_handle = self.home_handle
+        self.homing = False
+        self.home_handle = None
+        self.home_gid += 1
+
+    def _home_fail(self, why):
+        """Неудача возврата: без чёрного списка и без счётчиков целей фронтира."""
+        self.home_fail += 1
+        retries = int(self.get_parameter('home_retries').value)
+        self.home_retry_at = self._now() + 10.0
+        self.get_logger().warn(f'возврат на базу не удался ({why}), неудач {self.home_fail}/{retries}')
+        if self.home_fail >= retries and not self.home_gave_up:
+            self.home_gave_up = True
+            self.get_logger().warn('возврат на базу: попытки кончились, остаёмся на месте')
+
+    def _home_step(self, now):
+        """Раз в цикл: следим за домашней целью или запускаем её (только когда робот done и без цели)."""
+        gp = self.get_parameter
+        home = self._home_pose()
+        if not gp('home_on_done').value or home is None or self.pose is None:
+            return
+        dist = math.hypot(home[0] - self.pose[0], home[1] - self.pose[1])
+        if self.homing:
+            if not self.done:
+                return   # отмену сделает ветка 'фронтиры появились снова'
+            if dist <= float(gp('home_tol').value):
+                self._cancel_home()
+                self.home_reached = True
+                self.get_logger().info('на базе')
+                return
+            t, px, py = self.home_progress
+            if math.hypot(self.pose[0] - px, self.pose[1] - py) > float(gp('stuck_dist').value):
+                self.home_progress = (now, self.pose[0], self.pose[1])
+            elif now - t > float(gp('stuck_time').value):
+                self._cancel_home()
+                self._home_fail('застрял')
+                self._note_failure()
+            elif now - self.home_t0 > float(gp('goal_timeout').value):
+                self._cancel_home()
+                self._home_fail('тайм-аут')
+            return
+        if self.done and not self.home_reached and dist <= float(gp('home_tol').value):
+            self.home_reached = True
+            self.get_logger().info('на базе')
+            return
+        if not auction.need_home(self.done, self.goal is not None, self.homing, self.home_reached,
+                                 self.home_fail, int(gp('home_retries').value), dist, float(gp('home_tol').value)):
+            return
+        if now < self.home_retry_at or self.unsticking or now < self.hold_until:
+            return
+        if not self.nav_active or not self.nav.server_is_ready():
+            return
+        self._send_home(home)
+
+    def _send_home(self, home):
+        x, y, yaw = home
+        self.home_gid += 1
+        gid = self.home_gid
+        g = NavigateToPose.Goal()
+        g.pose.header.frame_id = 'world'
+        g.pose.header.stamp = self.get_clock().now().to_msg()
+        g.pose.pose.position.x = x
+        g.pose.pose.position.y = y
+        g.pose.pose.orientation.z = math.sin(yaw / 2)
+        g.pose.pose.orientation.w = math.cos(yaw / 2)
+        self.homing = True
+        self.home_handle = None
+        self.home_t0 = self._now()
+        self.home_progress = (self.home_t0, self.pose[0], self.pose[1])
+        self.get_logger().info(f'возврат на базу: ({x:.1f}, {y:.1f})')
+        fut = self.nav.send_goal_async(g)
+        fut.add_done_callback(lambda f, gid=gid: self._on_home_accept(f, gid))
+
+    def _on_home_accept(self, fut, gid):
+        gh = fut.result()
+        if gid != self.home_gid:
+            if gh.accepted:
+                gh.cancel_goal_async()
+            return
+        if not gh.accepted:
+            self.homing = False
+            self._home_fail('Nav2 отклонил цель')
+            return
+        self.home_handle = gh
+        gh.get_result_async().add_done_callback(lambda f, gid=gid: self._on_home_result(f, gid))
+
+    def _on_home_result(self, fut, gid):
+        if gid != self.home_gid or not self.homing:
+            return   # устаревший или отменённый нами результат
+        self.homing = False
+        self.home_handle = None
+        if fut.result().status == GoalStatus.STATUS_SUCCEEDED:
+            self.home_reached = True
+            self.get_logger().info('на базе')
+        else:
+            self._home_fail(f'Nav2 статус {fut.result().status}')
+
     def _flush_cancel(self):
         gh, self.stale_handle = self.stale_handle, None
         if gh is not None and self.goal is None:
@@ -794,9 +954,12 @@ class Explorer(Node):
             msg.current_goal = Point(x=self.goal[0], y=self.goal[1])
         msg.targets = [Point(x=x, y=y) for _, x, y, _, _ in top]
         msg.costs = [c for c, *_ in top]
-        msg.target_ids = [k for *_, k in top]
+        msg.target_ids = [self._gkey(k) for *_, k in top]
         msg.open_candidates = len(self.open_ids)
-        msg.gave_up = sorted(self.gave_local)
+        if self.global_keys:
+            msg.gave_up = sorted(auction.make_key(k, *self.gave_pos[k]) for k in self.gave_local if k in self.gave_pos)
+        else:
+            msg.gave_up = sorted(self.gave_local)
         msg.done = self.done
         self.bid_pub.publish(msg)
 

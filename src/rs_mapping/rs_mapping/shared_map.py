@@ -6,7 +6,11 @@
 [xmin, ymin, xmax, ymax], resolution, z_min, z_max, scan_rate, map_rate.
 Дроны (Фаза 5): air_robots (список), air_scan_rate, air_obst_h, air_free_h, air_max_h,
 free_z_max. При непустом air_robots кроме /map публикуются /map_ground и /map_air.
+Режим слоёв (Фаза 6, layers=true): у каждого робота свой слой, который строят только его датчики;
+вместо /map, /map_ground, /map_air публикуются /<робот>/map_layer (MapLayer, int8, см. rs_mapping.layers)
+и /map_collective (слияние всех слоёв, только для оценки).
 """
+import array
 import time
 
 import numpy as np
@@ -18,9 +22,11 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
+from rs_interfaces.msg import MapLayer
 from sensor_msgs.msg import PointCloud2
 from tf2_ros import Buffer, TransformException, TransformListener
 
+from rs_mapping import layers as L
 from rs_mapping.air_update import AirLayer, fuse
 from rs_mapping.grid_update import GridUpdater, cloud_to_array
 
@@ -56,6 +62,7 @@ class SharedMap(Node):
         self.declare_parameter('air_max_off_nadir_deg', 35.0)  # конус от вертикали; 0 = весь кадр
         self.declare_parameter('air_floor_plane', True)  # пол в кадре - плоскость (поправка наклона дрона)
         self.declare_parameter('free_z_max', 2.5)     # выше этого лидар не режет свободное, м
+        self.declare_parameter('layers', False)       # Фаза 6: слой на каждого робота вместо общей карты
 
         self.robots = list(self.get_parameter('robots').value)
         self.air_robots = list(self.get_parameter('air_robots').value or [])
@@ -76,15 +83,34 @@ class SharedMap(Node):
             z_max=float(self.get_parameter('z_max').value),
             robot_clear=float(self.get_parameter('robot_clear').value),
             free_z_max=float(self.get_parameter('free_z_max').value))
-        self.air = None
-        if self.air_robots:
-            self.air = AirLayer(
+        self.layers = bool(self.get_parameter('layers').value)
+
+        def make_air():
+            return AirLayer(
                 w, h, res, bounds[0], bounds[1],
                 obst_h=float(self.get_parameter('air_obst_h').value),
                 free_h=float(self.get_parameter('air_free_h').value),
                 max_h=float(self.get_parameter('air_max_h').value),
                 max_off_nadir_deg=float(self.get_parameter('air_max_off_nadir_deg').value),
                 floor_plane=bool(self.get_parameter('air_floor_plane').value))
+        self.air = None
+        if self.air_robots and not self.layers:
+            self.air = make_air()
+        # режим слоёв: свой GridUpdater на каждого наземного и свой AirLayer на каждого дрона
+        self.g_layers = {}
+        self.a_layers = {}
+        self.versions = {}
+        if self.layers:
+            for r in self.robots:
+                self.g_layers[r] = GridUpdater(
+                    w, h, res, bounds[0], bounds[1],
+                    z_min=float(self.get_parameter('z_min').value),
+                    z_max=float(self.get_parameter('z_max').value),
+                    robot_clear=float(self.get_parameter('robot_clear').value),
+                    free_z_max=float(self.get_parameter('free_z_max').value))
+            for r in self.air_robots:
+                self.a_layers[r] = make_air()
+            self.versions = {r: 0 for r in self.robots + self.air_robots}
         self.get_logger().info(f'карта {w}x{h} клеток, {res} м, origin=({bounds[0]}, {bounds[1]}), роботы: {self.robots}')
 
         self.tf_buffer = Buffer(cache_time=Duration(seconds=20))
@@ -115,12 +141,20 @@ class SharedMap(Node):
                                      lambda m, r=r: self._on_drone_odom(r, m), 10)
         map_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              reliability=ReliabilityPolicy.RELIABLE)
-        self.pub = self.create_publisher(OccupancyGrid, '/map', map_qos)
+        if self.layers:
+            layer_qos = QoSProfile(depth=2, reliability=ReliabilityPolicy.RELIABLE,
+                                   history=HistoryPolicy.KEEP_LAST)
+            self.pub_layer = {r: self.create_publisher(MapLayer, f'/{r}/map_layer', layer_qos)
+                              for r in self.robots + self.air_robots}
+            self.pub_coll = self.create_publisher(OccupancyGrid, '/map_collective', map_qos)
+        else:
+            self.pub = self.create_publisher(OccupancyGrid, '/map', map_qos)
         self.create_timer(1.0 / float(self.get_parameter('scan_rate').value) / len(self.robots),
                           self._process)
         if self.air_robots:
-            self.pub_ground = self.create_publisher(OccupancyGrid, '/map_ground', map_qos)
-            self.pub_air = self.create_publisher(OccupancyGrid, '/map_air', map_qos)
+            if not self.layers:
+                self.pub_ground = self.create_publisher(OccupancyGrid, '/map_ground', map_qos)
+                self.pub_air = self.create_publisher(OccupancyGrid, '/map_air', map_qos)
             self.create_timer(1.0 / float(self.get_parameter('air_scan_rate').value)
                               / len(self.air_robots), self._process_air)
         self.create_timer(1.0 / float(self.get_parameter('map_rate').value), self._publish)
@@ -171,7 +205,8 @@ class SharedMap(Node):
             T[:3, :3] = quat_to_matrix(tf.transform.rotation)
             tr = tf.transform.translation
             T[:3, 3] = (tr.x, tr.y, tr.z)
-            self.up.update(pts, T, [v for k, v in self.poses.items() if k != r], self.poses.get(r),
+            up = self.g_layers[r] if self.layers else self.up
+            up.update(pts, T, [v for k, v in self.poses.items() if k != r], self.poses.get(r),
                            list(self.drone_poses.values()))
             self.n_scans += 1
             self.t_cpu += time.process_time() - t0
@@ -199,7 +234,8 @@ class SharedMap(Node):
             tr = tf.transform.translation
             flat = pts.reshape(-1, 3).astype(np.float64)
             world = flat @ R.T + np.array([tr.x, tr.y, tr.z])
-            self.air.update(world, list(self.poses.values()),
+            air = self.a_layers[r] if self.layers else self.air
+            air.update(world, list(self.poses.values()),
                             [(v[0], v[1]) for k, v in self.drone_poses.items() if k != r],
                             sensor_xyz=(tr.x, tr.y, tr.z))
             self.n_scans += 1
@@ -215,10 +251,39 @@ class SharedMap(Node):
         m.info.origin.position.x = self.up.ox
         m.info.origin.position.y = self.up.oy
         m.info.origin.orientation.w = 1.0
-        m.data = data.tolist()
+        m.data = array.array('b', data.astype(np.int8).tobytes()) if self.layers else data.tolist()
         return m
 
+    def _publish_layers(self):
+        """Режим слоёв: /<робот>/map_layer каждому и /map_collective (слияние всех слоёв, для оценки)."""
+        now = self.get_clock().now().to_msg()
+        qg, qa = [], []
+        for kind, items, store in ((MapLayer.KIND_GROUND, self.g_layers, qg),
+                                   (MapLayer.KIND_AIR, self.a_layers, qa)):
+            for r, up in items.items():
+                q = L.quantize(up.logodds, up.seen)
+                store.append(q)
+                self.versions[r] += 1
+                m = MapLayer()
+                m.header.stamp = now
+                m.header.frame_id = self.frame
+                m.source = r
+                m.kind = kind
+                m.version = self.versions[r]
+                m.base_version = 0
+                m.width, m.height = self.up.w, self.up.h
+                m.resolution = float(self.up.res)
+                m.origin_x, m.origin_y = float(self.up.ox), float(self.up.oy)
+                m.encoding = MapLayer.ENC_RAW
+                m.data = array.array('B', q.tobytes())
+                self.pub_layer[r].publish(m)
+        coll = L.fuse_grids(L.merge_grid(qg), L.merge_grid(qa))
+        self.pub_coll.publish(self._grid_msg(coll))
+
     def _publish(self):
+        if self.layers:
+            self._publish_layers()
+            return
         if self.air is not None:
             self.pub.publish(self._grid_msg(fuse(self.up, self.air)))
             self.pub_ground.publish(self._grid_msg(self.up.to_grid_data()))
@@ -240,10 +305,19 @@ class SharedMap(Node):
         self.pub.publish(m)
         self.t_pub += time.process_time() - t0
 
+    def _known(self):
+        """Доля известных клеток (в режиме слоёв: клетка известна, если её видел любой слой)."""
+        if not self.layers:
+            return self.up.seen.mean()
+        seen = np.zeros_like(self.up.seen)
+        for up in list(self.g_layers.values()) + list(self.a_layers.values()):
+            seen |= up.seen
+        return seen.mean()
+
     def _stats(self):
         n = max(self.n_scans, 1)
         self.get_logger().info(f'сканов {self.n_scans}, {1000 * self.t_cpu / n:.1f} мс CPU на скан, '
-                               f'известно {100.0 * self.up.seen.mean():.1f} % карты; CPU всего: сканы {self.t_cpu:.1f} с, tolist {self.t_data:.1f} с, publish {self.t_pub:.1f} с')
+                               f'известно {100.0 * self._known():.1f} % карты; CPU всего: сканы {self.t_cpu:.1f} с, tolist {self.t_data:.1f} с, publish {self.t_pub:.1f} с')
 
 
 def main():

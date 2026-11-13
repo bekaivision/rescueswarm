@@ -27,6 +27,17 @@ Visualization Manager:
       Reliability Policy: Reliable
     Namespaces: {}
   - Class: rviz_default_plugins/MarkerArray
+    Name: comms links
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /comms/markers
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Namespaces: {}
+  - Class: rviz_default_plugins/MarkerArray
     Name: ground_1 frontiers
     Enabled: true
     Value: true

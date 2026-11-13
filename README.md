@@ -29,7 +29,16 @@ people may be found. All work runs in simulation.
   robots confirm people up close. On 4 seeds the mixed swarm confirms all 19 reachable
   people with both drone modes, no decoys, and reaches 90 % coverage in 60-70 s instead
   of 310 s. See [report](docs/PHASE_5_REPORT.md).
-- **Next:** Phase 6, degraded communication between robots.
+- **Phase 6, done:** robots no longer see each other's topics. Maps, people
+  observations, auction bids and poses travel as packets through a `comms_sim` radio
+  model (range, walls, bandwidth, loss, delay, outages). Each robot keeps its own map
+  and people list, and a base station at the entrance shows what reached the rescuer.
+  A robot cut off for 140 s keeps exploring, and the base catches up 2 s after the link
+  returns. On 4 seeds and 4 link levels all 19 reachable people are confirmed at the
+  base with no decoys. A poor link barely changes base coverage, because drones relay
+  over the walls, but it stretches the search from 158 s to 618 s. See
+  [report](docs/PHASE_6_REPORT.md).
+- **Next:** Phase 7, experiment series and swarm size.
 
 The full research plan is in [docs/PLAN.md](docs/PLAN.md). Plan and reports are
 written in Russian.
@@ -49,6 +58,8 @@ make check-phase4             # Phase 4 check, ground truth vs SLAM, results in 
 make search DRONES=2          # 3 ground robots + 2 light drones, Gazebo + RViz
 make search-headless DRONES=2 DBACK=px4   # same with PX4 SITL drones, no windows
 make check-phase5             # Phase 5 check, ground only vs mixed swarm, results in results/phase-5/
+make search-headless DRONES=2 COMMS=medium   # exchange only through the comms_sim radio model
+make check-phase6             # Phase 6 check, 4 link levels + link outage test, results in results/phase-6/
 ```
 
 Run `make help` for all commands.
@@ -56,4 +67,4 @@ Run `make help` for all commands.
 ## Stack
 
 ROS 2 Jazzy, Gazebo Harmonic, Nav2, Cyclone DDS, PX4 SITL v1.17 with
-Micro XRCE-DDS for drones.
+Micro XRCE-DDS for drones, own radio model (`rs_comms`) for swarm communication.
