@@ -46,9 +46,11 @@ import rclpy
 from geometry_msgs.msg import TransformStamped, Vector3Stamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformListener
+from rcl_interfaces.msg import ParameterDescriptor
 
 
 def quat_to_mat(x, y, z, w):
@@ -114,9 +116,13 @@ def world_odom(T_wb, T_ob, base_z):
 class SlamAdapter(Node):
     def __init__(self):
         super().__init__('slam_adapter')
-        self.declare_parameter('robots', ['ground_1', 'ground_2', 'ground_3'])
+        self.declare_parameter('robots', [], ParameterDescriptor(dynamic_typing=True))
         self.declare_parameter('poses', '')
         self.declare_parameter('rate', 20.0)
+        # TF world -> <r>/odom штампуем на tf_future_s вперёд (как AMCL): при низком RTF (3 робота + 2 дрона, RTF 0.3-0.5)
+        # последняя запись отстаёт на 0.05-0.3 с, и Nav2 (RPPPathHandler.transformPose) падает с "extrapolation into the future",
+        # цель осмотра отменяется со статусом 6 (seed 1 dev: 10 из 10 отказов осмотра). 0 = как раньше.
+        self.declare_parameter('tf_future_s', 0.3)
         self.declare_parameter('out_dir', '')
         self.declare_parameter('jump_abs', 0.05)
         self.declare_parameter('jump_rel', 0.3)
@@ -137,7 +143,9 @@ class SlamAdapter(Node):
         self.jump_rel = float(self.get_parameter('jump_rel').value)
         self.max_yaw_diff = float(self.get_parameter('max_yaw_diff').value)
         self.lam0 = float(self.get_parameter('deg_lambda0').value)
-        self.robots = list(self.get_parameter('robots').value)
+        self.robots = list(self.get_parameter('robots').value or [])
+        if not self.robots:
+            raise RuntimeError('параметр robots пуст: список роботов задаёт launch (explore.launch.py / slam.launch.py), запасного списка нет')
         poses = [tuple(float(v) for v in p.split(',')) for p in self.get_parameter('poses').value.split(';') if p.strip()]
         if len(poses) < len(self.robots):
             raise RuntimeError(f'poses: задано {len(poses)} поз, нужно {len(self.robots)}')
@@ -348,7 +356,7 @@ class SlamAdapter(Node):
         for r in self.robots:
             self.process(r)
     def publish_tf(self):
-        stamp = self.get_clock().now().to_msg()
+        stamp = (self.get_clock().now() + Duration(seconds=float(self.get_parameter('tf_future_s').value))).to_msg()
         msgs = []
         for r in self.robots:
             T = self.t_wo[r]

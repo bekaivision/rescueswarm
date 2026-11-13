@@ -36,6 +36,7 @@
 | `make explore\|search[-headless] COMMS=ideal\|good\|medium\|poor [OUTAGES='ground_1:60:200']` | Фаза 6: обмен между роботами только через `comms_sim` (дальность, стены, полоса, потери, задержка; `OUTAGES` - полные обрывы узлов по сим. времени); у каждого робота своя карта и своё слияние отметок, база `base` у входа = то, что видит спасатель (`/map`, `/people/*`) |
 | `make check-phase6 [CHECK_SEEDS="1 2 3 7"] [LEVELS="ideal good medium poor"] [MAX_SIM_S=900] [OUTAGE=1]` | скриптовая проверка Фазы 6: смешанный рой (2 лёгких дрона) на каждом уровне связи + тест обрыва связи ground_1 (только наземные), сводка в `results/phase-6/check/summary.md` |
 | `make video PHASE=6 [SEED=1] [RERECORD=1]` | Видео Фазы 6 в `media/phase-6.mp4` (`scripts/video/phase6.sh`: обрыв связи ground_1 60-200 с, карта базы против карты робота) |
+| `make check-phase7a [CHECK_SEEDS="1 2 3 7"] [MAX_SIM_S=900] [PARTS="light px4 n5"]` | Фаза 7a: полная связка `LOC=slam DRONES=2 COMMS=medium` (light и px4) на каждом seed и N=5 (с дронами и без), сводка в `results/phase-7a/check/summary.md` |
 | `make sim [WORLD=file.sdf]` | Gazebo с окном, по умолчанию `shapes.sdf` |
 | `make sim-headless` | Gazebo без окна на `configs/worlds/phase0_bench.sdf` |
 | `make video PHASE=0` | Видео Фазы 0 в `media/phase-0.mp4` (`scripts/video/phase0.sh`; кадры в `media/raw/phase-0/`, `--rerecord` снимает заново) |
@@ -44,6 +45,8 @@
 | `make video PHASE=3 [SEED=1] [RERECORD=1]` | Видео Фазы 3 в `media/phase-3.mp4` (`scripts/video/phase3.sh`; сырьё в `media/raw/phase-3/`: запись headless-прогона поиска (карта, отметки, тепловые кадры) + кадры рисуются из неё, экран не нужен; из кэша ~1-2 мин, `RERECORD=1` пишет прогон заново, ~5-8 мин) |
 | `make video PHASE=4 [SEED=1] [RERECORD=1]` | Видео Фазы 4 в `media/phase-4.mp4` (gt против slam; `RERECORD=1` пишет заново) |
 | `make eval`, `make video PHASE=<n>` (n>6) | Заглушки (код 1), реализация позже |
+
+Фаза 7a: один прогон с оценками `scripts/p7a_run.sh <каталог> <seed> [аргументы launch]` (env `N LOC DRONES DBACK COMMS SETUP`), повтор слияния отметок по записанным детекциям `python3 scripts/replay_fusion.py --root results -j 6` (хост, проверка правил `marks.py` без симуляции). Список роботов задают только launch-файлы (узел без списка падает с ошибкой). Обмен графами `mrg_slam` между роботами по умолчанию выключен (иначе он шёл бы мимо `comms_sim`; `slam_graph_exchange:=true` включает). Патч `patches/mrg_slam-init-guess-sign.patch` не применяется: с ним хуже. Отчёт: [docs/PHASE_7A_REPORT.md](docs/PHASE_7A_REPORT.md).
 
 Фаза 6: пакет `rs_comms` (`comms_sim`, агент связи `onboard` на каждом узле), оценка `scripts/phase6_eval.py <каталог прогона>`, сводка `scripts/phase6_summary.py <каталог> "1 2 3 7" "ideal good medium poor"` (хост, stdlib + numpy). Отчёт: [docs/PHASE_6_REPORT.md](docs/PHASE_6_REPORT.md). С `comms:=false` (по умолчанию) всё как в Фазе 5.
 

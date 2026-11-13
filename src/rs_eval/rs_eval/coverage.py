@@ -71,7 +71,7 @@ class Coverage(Node):
         super().__init__('coverage')
         P = self.declare_parameter
         P('mask_dir', '')
-        P('robots', ['ground_1', 'ground_2', 'ground_3'])
+        P('robots', [], ParameterDescriptor(dynamic_typing=True))
         P('out_dir', '/tmp/rs_coverage')
         P('target', 0.95)
         P('max_time', 0.0)
@@ -84,7 +84,9 @@ class Coverage(Node):
         P('sync_timeout', 120.0)  # макс. ожидание синхронизации, сим. с
         # дроны; динамический тип: пустой список по умолчанию (иначе rclpy не выводит тип пустого массива)
         self.declare_parameter('air_robots', [], ParameterDescriptor(dynamic_typing=True))
-        self.robots = list(self.get_parameter('robots').value)
+        self.robots = list(self.get_parameter('robots').value or [])
+        if not self.robots:
+            raise RuntimeError('параметр robots пуст: список роботов задаёт launch (explore.launch.py / slam.launch.py), запасного списка нет')
         self.air = list(self.get_parameter('air_robots').value or [])
         self.comms = bool(self.get_parameter('comms').value)
         self.cov_coll = 0.0

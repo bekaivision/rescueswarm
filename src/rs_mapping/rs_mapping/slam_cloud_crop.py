@@ -20,12 +20,13 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Vector3Stamped
 from sensor_msgs.msg import PointCloud2
+from rcl_interfaces.msg import ParameterDescriptor
 
 
 class SlamCloudCrop(Node):
     def __init__(self):
         super().__init__('slam_cloud_crop')
-        self.declare_parameter('robots', ['ground_1', 'ground_2', 'ground_3'])
+        self.declare_parameter('robots', [], ParameterDescriptor(dynamic_typing=True))
         self.declare_parameter('min_z', -0.15)
         self.declare_parameter('max_z', 5.0)
         self.declare_parameter('min_range', 0.45)
@@ -36,7 +37,10 @@ class SlamCloudCrop(Node):
         self.max_step = float(self.get_parameter('max_step').value)
         self.pubs = {}
         self.deg_pubs = {}
-        for r in self.get_parameter('robots').value:
+        robots = list(self.get_parameter('robots').value or [])
+        if not robots:
+            raise RuntimeError('параметр robots пуст: список роботов задаёт launch (explore.launch.py / slam.launch.py), запасного списка нет')
+        for r in robots:
             self.pubs[r] = self.create_publisher(PointCloud2, f'/{r}/slam_points', 10)
             self.deg_pubs[r] = self.create_publisher(Vector3Stamped, f'/{r}/slam_degeneracy', 10)
             self.create_subscription(PointCloud2, f'/{r}/lidar/points', lambda m, r=r: self.cb(r, m), 10)

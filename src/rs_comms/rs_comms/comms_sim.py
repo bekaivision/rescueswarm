@@ -64,6 +64,8 @@ class CommsSim(Node):
         gp = self.get_parameter
         self.nodes = list(gp('nodes').value or [])
         self.robots = list(gp('robots').value or [])
+        if not self.robots:
+            raise RuntimeError('параметр robots пуст: список роботов задаёт launch (explore.launch.py), запасного списка нет')
         self.air_robots = list(gp('air_robots').value or [])
         self.base_xyz = [float(v) for v in gp('base_xyz').value]
         self.level = gp('level').value

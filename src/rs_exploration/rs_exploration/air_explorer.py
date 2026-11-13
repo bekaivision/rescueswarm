@@ -27,6 +27,7 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from rs_exploration import air_targets, auction
+from rcl_interfaces.msg import ParameterDescriptor
 
 FLY_STATES = ('READY', 'MOVING')
 GONE_STATES = ('LANDING', 'LANDED', 'FAULT')   # дрон вышел из задачи не по нашей команде
@@ -37,7 +38,7 @@ class AirExplorer(Node):
         super().__init__('air_explorer')
         P = self.declare_parameter
         P('robot', 'drone_1')
-        P('air_robots', ['drone_1'])
+        P('air_robots', [], ParameterDescriptor(dynamic_typing=True))   # обязателен, задаёт launch
         P('region', [-11.0, -9.0, 11.0, 9.0])   # область поиска (xmin, ymin, xmax, ymax), как у наземных
         P('cell_m', 2.0)              # размер крупной клетки, м
         P('unseen_frac', 0.3)         # доля неизвестных мелких клеток, выше которой клетка "не видна"
@@ -54,7 +55,9 @@ class AirExplorer(Node):
         P('auction_delay', 0.3)
 
         self.me = self.get_parameter('robot').value
-        self.air = list(self.get_parameter('air_robots').value)
+        self.air = list(self.get_parameter('air_robots').value or [])
+        if not self.air:
+            raise RuntimeError('параметр air_robots пуст: список дронов задаёт launch (explore.launch.py), запасного списка нет')
         self.region = [float(v) for v in self.get_parameter('region').value]
         self.cell_m = float(self.get_parameter('cell_m').value)
         self.R = float(self.get_parameter('assign_radius').value)

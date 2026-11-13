@@ -41,6 +41,29 @@ DEFAULTS = dict(
     #    Больше 3 нельзя: у части людей высота известна лишь в 2-3 близких видах (seed 2 slam).
     shadow_m=1.3,
     min_height_obs=3,
+    # Фаза 7a. Слияние отметок дальше gate_m (тело 1.82 м, виды с концов) только если у обеих положение
+    # надёжно: ближайший замер не дальше merge_range_m или есть замер с дрона. Дальнее положение врёт на
+    # ~1 м (9 детекций с 9.4-9.9 м из тупика слились с соседней отметкой и человек потерялся, seed 2). Порог 9 м
+    # выбран по повтору журналов: 6 м почти удваивал число открытых кандидатов (161 -> 294), 9 м даёт 161 -> 181.
+    merge_range_m=9.0,
+    # Второе "тело" с отвергнутой отметкой: у человека ранняя отметка может быть отвергнута по выбросам высоты или
+    # горячему замеру, и рядом с CONFIRMED остаётся вторая отметка того же человека (основная метрика сопоставляет
+    # человека с ней, а подтверждённую считает призраком). Люди и ловушки стоят >= 2 м друг от друга, поэтому
+    # отметка too_tall/too_hot/temp_out_of_band в пределах absorb_m от CONFIRMED - тот же объект: вливаем (0 = выкл.).
+    absorb_m=1.3,
+    # Пересмотр CONFIRMED: надёжные замеры высоты (дальность не меньше rev_height_range_m: ближе робот упирается
+    # в объект и высота врёт) группируем по дальности (корзины rev_height_bin_m): стоящий робот даёт десятки
+    # одинаковых замеров, это один вид, а не десятки. Если замеров не меньше rev_height_obs, корзин не меньше
+    # rev_height_bins, и медиана медиан корзин выше max_height_m, отметка отвергается (too_tall+revised).
+    # Люди: p99 высоты 0.41 м на дальностях от 0.5 м, но у лидара бывают устойчивые выбросы с одной точки
+    # (person_5 seed 1: 25 замеров 0.496 с 0.78 м) - их отсекают корзины.
+    rev_height_range_m=0.5, rev_height_obs=5, rev_height_bins=3, rev_height_bin_m=0.25,
+    # Огонь (600 K) в 2 м за человеком: робот вплотную стоит на линии робот-человек-огонь, пятно огня ложится на
+    # лидарную точку человека, и все близкие замеры горячие (seed 3, person_2: 11 одинаковых замеров 598.8 K стоящего
+    # робота против 60 холодных замеров дрона). Если у дрона не меньше air_temp_min_obs замеров, температура отметки
+    # для полосы = более холодная из медиан (близкие замеры робота, замеры дронов). У настоящей ловушки (огонь,
+    # батарея) горячо и у дрона, она по-прежнему отвергается. 0 = выкл. Порог 3-30 даёт один и тот же результат на журналах.
+    air_temp_min_obs=5,
 )
 
 # отвергнута по свойствам самого объекта (не "не увидели вблизи"): её соседи - тот же объект
@@ -61,7 +84,9 @@ class Mark:
         self.robots = []
         self.min_range = float('inf')
         self.temps_close, self.temps_all = [], []
+        self.temps_air = []     # замеры температуры от дронов (для mean_temp)
         self.heights, self.lengths = [], []
+        self.heights_rel = []   # надёжные замеры высоты (дальность, высота), для пересмотра CONFIRMED
         self.n_close = 0
         self.first_seen = t
         self.status_time = t
@@ -69,6 +94,7 @@ class Mark:
         self.reason = 'first_detection'
         self.neg = {}       # робот -> [накоплено с, время последнего кадра]
         self.len_hi = DEFAULTS['len_hi']
+        self.air_temp_min = DEFAULTS['air_temp_min_obs']
         self.rgb_hits = 0
         self.rgb_score_max = 0.0
         self.rgb_robots = []
@@ -81,10 +107,17 @@ class Mark:
     def y(self):
         return self.sy / self.sw
 
-    def mean_temp(self):
+    def mean_temp(self, air=True):
         # медиана: редкие замеры огня рядом (599 K) не должны выводить человека из полосы температур (Фаза 4)
         v = self.temps_close or self.temps_all
-        return statistics.median(v) if v else float('nan')
+        if not v:
+            return float('nan')
+        t = statistics.median(v)
+        # пятно огня на точке человека греет только замеры робота вблизи; дрон видит человека холодным
+        # (air=False - только наземная оценка: для сравнения двух видов одного тела, как раньше)
+        if air and self.air_temp_min and len(self.temps_air) >= self.air_temp_min:
+            t = min(t, statistics.median(self.temps_air))
+        return t
 
     def height(self):
         return statistics.median(self.heights) if self.heights else float('nan')
@@ -130,6 +163,7 @@ class Fusion:
         if best is None:
             best = Mark(f'mark_{self.next_id}', t)
             best.len_hi = p['len_hi']
+            best.air_temp_min = p['air_temp_min_obs']
             self.next_id += 1
             self.marks.append(best)
         m = best
@@ -141,6 +175,7 @@ class Fusion:
         air = robot in self.air_robots
         if air:
             m.n_air += 1
+            m.temps_air.append(temp)
         else:
             m.neg = {}   # есть детекция: накопленное "не видим" обнуляем (дрон отрицательное свидетельство не трогает)
         if robot not in m.robots:
@@ -153,12 +188,15 @@ class Fusion:
             m.temps_close.append(temp)
             if not math.isnan(height):
                 m.heights.append(height)
+                if rng >= p['rev_height_range_m']:
+                    m.heights_rel.append((rng, height))
             if not math.isnan(length):
                 m.lengths.append(length)
         changed = self._evaluate(m, t)
         merged = self._merge(m)
         if merged is not m:
             changed = self._evaluate(merged, t) or changed
+        changed = self._revise(merged, t) or changed
         return merged, changed
 
     def _shadow(self, x, y):
@@ -182,19 +220,32 @@ class Fusion:
         h = m.height()
         return math.isnan(h) or h <= p['max_height_m']
 
+    def _precise(self, m):
+        return m.min_range <= self.p['merge_range_m'] or m.n_air > 0
+
+    def _absorbs(self, a, b):
+        """a CONFIRMED, b отвергнута по свойствам объекта и стоит вплотную: b влить в a."""
+        return (a.status == CONFIRMED and b.status == REJECTED and b.reason.split('+')[0] in SHADOW_REASONS
+                and math.hypot(a.x - b.x, a.y - b.y) <= self.p['absorb_m'])
+
     def _same_object(self, a, b):
         d = math.hypot(a.x - b.x, a.y - b.y)
         if d <= self.p['gate_m']:
+            return True
+        if self._absorbs(a, b) or self._absorbs(b, a):
             return True
         if d > self.p['body_merge_m']:
             return False
         if not (self._person_like(a) and self._person_like(b)):
             return False
+        # положение по дальним замерам неточное: за пределами gate_m такие отметки не сливаем
+        if not (self._precise(a) and self._precise(b)):
+            return False
         # отметка только из воздуха: температура верхней грани с дрона не сравнима с температурой
         # наземного вида (другое разрешение и ядро пятна), сравнение температур пропускаем
         if a.n_air == a.n_obs or b.n_air == b.n_obs:
             return True
-        return abs(a.mean_temp() - b.mean_temp()) <= self.p['body_dtemp_k']
+        return abs(a.mean_temp(air=False) - b.mean_temp(air=False)) <= self.p['body_dtemp_k']
 
     def _merge(self, m):
         """Две отметки одного объекта (разные виды одного тела): сливаем в старую."""
@@ -211,6 +262,16 @@ class Fusion:
             keep_reason = a.reason if a.n_close >= b.n_close else b.reason
             if CONFIRMED in (a.status, b.status) and REJECTED not in (a.status, b.status):
                 keep_status, keep_reason = CONFIRMED, (a.reason if a.status == CONFIRMED else b.reason)
+            elif self._absorbs(a, b) or self._absorbs(b, a):
+                # отвергнутую отметку рядом с CONFIRMED просто убираем: её положение и замеры (горячее пятно,
+                # высокий предмет рядом) не должны сдвигать подтверждённого человека и запускать пересмотр высоты
+                conf, rej = (a, b) if a.status == CONFIRMED else (b, a)
+                conf.n_obs += rej.n_obs
+                conf.first_seen = min(conf.first_seen, rej.first_seen)
+                self.marks.remove(rej)
+                self.removed.append(rej.id)
+                m = conf
+                continue
             a.sx += b.sx
             a.sy += b.sy
             a.sw += b.sw
@@ -221,8 +282,10 @@ class Fusion:
             a.min_range = min(a.min_range, b.min_range)
             a.temps_close += b.temps_close
             a.temps_all += b.temps_all
+            a.temps_air += b.temps_air
             a.heights += b.heights
             a.lengths += b.lengths
+            a.heights_rel += b.heights_rel
             a.first_seen = min(a.first_seen, b.first_seen)
             a.rgb_hits += b.rgb_hits
             a.rgb_score_max = max(a.rgb_score_max, b.rgb_score_max)
@@ -264,6 +327,26 @@ class Fusion:
         else:
             return False    # форма пока не подходит и не отвергает: ждём ещё видов
         self._set(m, new, t, why)
+        return True
+
+    def _revise(self, m, t):
+        """Пересмотр CONFIRMED: надёжные замеры высоты потом стабильно выше max_height_m -> REJECTED.
+
+        Не возвращаем в CANDIDATE: тот же набор замеров снова дал бы CONFIRMED (медиана всех замеров, в том
+        числе из упора вплотную) и отметка мигала бы. REJECTED с причиной too_tall также прячет соседние
+        детекции этого объекта (SHADOW_REASONS). Людей не трогает: у них медиана надёжных замеров ~0.34 м.
+        """
+        p = self.p
+        if m.status != CONFIRMED or len(m.heights_rel) < p['rev_height_obs']:
+            return False
+        bins = {}
+        for r, h in m.heights_rel:
+            bins.setdefault(int(r / p['rev_height_bin_m']), []).append(h)
+        if len(bins) < p['rev_height_bins']:
+            return False
+        if statistics.median(statistics.median(v) for v in bins.values()) <= p['max_height_m']:
+            return False
+        self._set(m, REJECTED, t, 'too_tall+revised')
         return True
 
     def confidence(self, m):

@@ -20,13 +20,14 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 
 from rs_mapping.footprint_scan import make_angles, ray_rect_ranges
+from rcl_interfaces.msg import ParameterDescriptor
 
 
 class OtherRobots(Node):
     def __init__(self):
         super().__init__('other_robots')
         P = self.declare_parameter
-        P('robots', ['ground_1', 'ground_2', 'ground_3'])
+        P('robots', [], ParameterDescriptor(dynamic_typing=True))
         P('rate', 10.0)
         P('n_rays', 720)
         P('half_len', 0.25)
@@ -34,7 +35,9 @@ class OtherRobots(Node):
         P('pad', 0.03)
         P('max_range', 8.0)
         P('poses_rate', 5.0)
-        self.robots = list(self.get_parameter('robots').value)
+        self.robots = list(self.get_parameter('robots').value or [])
+        if not self.robots:
+            raise RuntimeError('параметр robots пуст: список роботов задаёт launch (explore.launch.py / slam.launch.py), запасного списка нет')
         self.n_rays = int(self.get_parameter('n_rays').value)
         self.angles = make_angles(self.n_rays)
         self.max_range = float(self.get_parameter('max_range').value)

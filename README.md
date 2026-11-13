@@ -49,6 +49,7 @@ Everything is built and run in Docker. Nothing is installed on the host.
 
 ```bash
 make image                    # build rescueswarm-dev:jazzy
+make deps                     # fetch external repos from deps.repos into external/
 make build                    # colcon build inside the container
 make explore SEED=1           # Gazebo + RViz, 3 robots explore a generated world
 make explore-headless SEED=1  # same without windows

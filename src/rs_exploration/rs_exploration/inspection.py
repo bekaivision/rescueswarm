@@ -99,3 +99,18 @@ class GiveUp:
         for key, _ in out:
             self.since.pop(key, None)
         return out
+
+
+def is_transient_fail(since_sent, min_s):
+    """Отказ Nav2 пришёл раньше min_s после отправки цели: это сбой инфраструктуры (TF), а не недостижимая цель."""
+    return since_sent < min_s
+
+
+def count_fail(n, transient):
+    """Счётчик неудач осмотра: сбой сразу после отправки цели в счёт не идёт (кулдаун всё равно ставится отдельно)."""
+    return n if transient else n + 1
+
+
+def blocked(block, key, now):
+    """Кулдаун на осмотр key ещё идёт (block: id -> время конца)."""
+    return now < block.get(key, 0.0)

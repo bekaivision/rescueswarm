@@ -87,3 +87,17 @@ def test_batch_equals_direct(tmp_path):
     assert [{k: v for k, v in r.items() if k != 'rx'} for r in ln] == lo
     rn = [json.loads(s) for s in open(tmp_path / 'new' / 'rgb_detections.jsonl')]
     assert 'rx' in rn[0]
+
+
+def test_empty_robots_gives_clear_error(tmp_path):
+    ov = [rclpy.Parameter('out_dir', value=str(tmp_path))]
+    orig = rclpy.node.Node.__init__
+
+    def init(self, name, **kw):
+        orig(self, name, parameter_overrides=ov, **kw)
+    pf.Node.__init__ = init
+    try:
+        with pytest.raises(ValueError, match='robots пуст'):
+            pf.PeopleFusion()
+    finally:
+        pf.Node.__init__ = orig

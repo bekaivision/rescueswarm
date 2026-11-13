@@ -16,6 +16,9 @@ gt: TF и /odom истинные (как в Фазе 3b). slam: /odom и TF odom
 Связь (Фаза 6): comms:=true - роботы обмениваются данными только пакетами через comms_sim (радиомодель),
 у каждого своя карта /<r>/map и свои отметки людей, база base отдаёт общие /map и /people/*.
 Аргументы: link (ideal|good|medium|poor), outages ("ground_1:60:180;drone_1:30:90"), home_on_done, comms_seed.
+SLAM (Фаза 7a): slam_init_guess (false), slam_loop_closure (false), slam_graph_exchange (auto = как slam_loop_closure);
+включённый обмен графами идёт по ROS мимо comms_sim, при comms:=true launch предупреждает об этом.
+Списки роботов и дронов считает только этот launch-файл (n, drones), в узлах запасных списков нет.
 С comms:=false запуск ровно как в Фазе 5.
 """
 import os
@@ -26,7 +29,7 @@ import sys
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, EmitEvent, IncludeLaunchDescription,
+from launch.actions import (DeclareLaunchArgument, EmitEvent, IncludeLaunchDescription, LogInfo,
                             OpaqueFunction, RegisterEventHandler)
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
@@ -62,6 +65,10 @@ def launch_setup(context):
             f.write(add_px4_systems(txt))
     with open(os.path.join(world_dir, 'ground_truth.yaml')) as f:
         gt = yaml.safe_load(f)
+    if n < 1:
+        raise RuntimeError(f'n: {n}, нужен хотя бы один наземный робот')
+    if len(gt['spawn_poses']) < n:
+        raise RuntimeError(f"в мире {len(gt['spawn_poses'])} стартовых поз (spawn_poses), нужно {n} роботов")
     poses = ';'.join(f"{p['x']},{p['y']},{p['yaw']}" for p in gt['spawn_poses'][:n])
     b = gt['building']
     region = [b['xmin'] - 1.0, b['ymin'] - 1.0, b['xmax'] + 1.0, b['ymax'] + 1.0]  # как маска покрытия
@@ -135,9 +142,15 @@ def launch_setup(context):
             actions.append(Node(package='rs_comms', executable='onboard', namespace=node,
                                 output='screen', parameters=[sim, p]))
     if loc == 'slam':
+        sgx = arg('slam_graph_exchange').strip().lower()
+        if comms and (sgx == 'true' or (sgx == 'auto' and arg('slam_loop_closure').strip().lower() == 'true')):
+            actions.append(LogInfo(msg='ПРЕДУПРЕЖДЕНИЕ: обмен графами mrg_slam включён (slam_graph_exchange / slam_loop_closure), '
+                                       'он идёт по ROS напрямую и обходит comms_sim: результаты связи будут нечестными'))
         actions.append(IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(bringup, 'launch', 'slam.launch.py')),
-            launch_arguments={'n': str(n), 'poses': poses, 'out_dir': out_dir}.items()))
+            launch_arguments={'n': str(n), 'poses': poses, 'out_dir': out_dir,
+                              'init_guess': arg('slam_init_guess'), 'loop_closure': arg('slam_loop_closure'),
+                              'graph_exchange': arg('slam_graph_exchange')}.items()))
     for i, r in enumerate(robots, start=1):
         ex_params = {'robot_id': r, 'robots': robots, 'region': region, 'publish_cells': i == 1}
         ex_remap = []
@@ -216,6 +229,9 @@ def generate_launch_description():
         DeclareLaunchArgument('outages', default_value='', description='отказы узлов "ground_1:60:180;drone_1:30:90" (узел:с:до, сим. секунды)'),
         DeclareLaunchArgument('home_on_done', default_value='true', description='в режиме связи: возвращаться на базу после исследования'),
         DeclareLaunchArgument('comms_seed', default_value='1', description='зерно потерь пакетов в comms_sim'),
+        DeclareLaunchArgument('slam_init_guess', default_value='false', description='slam: колёсная одометрия как начальное приближение scan matching (init_guess)'),
+        DeclareLaunchArgument('slam_loop_closure', default_value='false', description='slam: замыкания петель mrg_slam (loop_closure)'),
+        DeclareLaunchArgument('slam_graph_exchange', default_value='auto', description='slam: обмен графами между роботами по ROS мимо comms_sim: auto = как slam_loop_closure; true/false'),
         DeclareLaunchArgument('air_perception', default_value='true', description='запускать air_thermal_detector на каждом дроне (нужен perception)'),
     ]
     return LaunchDescription(decl + [OpaqueFunction(function=launch_setup)])

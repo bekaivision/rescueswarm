@@ -14,7 +14,12 @@ map2odom_publisher (каждый ~0.27 ядра). Здесь та же начи�
 Привязка: init_pose каждого экземпляра = точка старта робота в world, поэтому карта mrg_slam = world.
 Базовые параметры берутся из config/mrg_slam_ground.yaml, здесь только то, что зависит от робота.
 Аргументы: n, poses ("x,y,yaw;..." - как в robots.launch.py), out_dir, loop_closure (false), init_guess (false), deg_lambda0 (200),
-config (другой yaml), cloud_crop (true; false отключает и оценку вырожденности).
+config (другой yaml), cloud_crop (true; false отключает и оценку вырожденности),
+graph_exchange (auto = как loop_closure; true/false). Обмен графами mrg_slam идёт напрямую по ROS, мимо comms_sim, поэтому
+без замыканий петель (когда принятые графы всё равно не нужны) он выключен: у каждого экземпляра в multi_robot_names только
+собственное имя, режим обмена NONE, а общие топики /mrg_slam/odom_broadcast и /mrg_slam/slam_pose_broadcast
+переназначены в закрытые топики робота (иначе роботы слышали бы друг друга по ROS в обход радио).
+Список роботов (ground_1..n) считает только этот launch-файл (по n).
 """
 import copy
 import os
@@ -45,6 +50,11 @@ def launch_setup(context):
     robots = [f'ground_{i}' for i in range(1, n + 1)]
     cfg_path = arg('config') or os.path.join(get_package_share_directory('rs_bringup'), 'config', 'mrg_slam_ground.yaml')
     crop = arg('cloud_crop').lower() == 'true'
+    loops = arg('loop_closure').lower() == 'true'
+    gx = arg('graph_exchange').strip().lower()
+    if gx not in ('auto', 'true', 'false'):
+        raise RuntimeError(f"graph_exchange: '{gx}', нужно auto, true или false")
+    exchange = loops if gx == 'auto' else gx == 'true'
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
     base = lambda k: cfg[k]['ros__parameters']  # noqa: E731
@@ -65,10 +75,16 @@ def launch_setup(context):
         scan['enable_robot_odometry_init_guess'] = arg('init_guess').lower() == 'true'
         scan['robot_odom_frame_id'] = f'{r}/odom'
         slam = copy.deepcopy(base('mrg_slam_component'))
-        slam.update({'own_name': r, 'multi_robot_names': robots, 'map_frame_id': f'{r}/slam_map',
+        # обмен выключен: в списке только сам робот (клиентов запроса графа нет), режим NONE (запросов нет в любом случае)
+        slam.update({'own_name': r, 'multi_robot_names': robots if exchange else [r],
+                     'graph_exchange_mode': 'PATH_PROXIMITY' if exchange else 'NONE',
+                     'map_frame_id': f'{r}/slam_map',
                      'odom_frame_id': f'{r}/slam_odom', 'x': x, 'y': y, 'yaw': yaw,
                      'init_pose': [x, y, 0.0, 0.0, 0.0, yaw]})  # x, y, z, roll, pitch, yaw
-        slam.update(LOOPS_ON if arg('loop_closure').lower() == 'true' else LOOPS_OFF)
+        slam.update(LOOPS_ON if loops else LOOPS_OFF)
+        # общие абсолютные топики mrg_slam (позы всех экземпляров) без обмена уводим в закрытые топики робота
+        no_bcast = [] if exchange else [(f'/mrg_slam/{t}', f'/{r}/mrg_slam_isolated/{t}')
+                                        for t in ('odom_broadcast', 'slam_pose_broadcast')]
         # TF scan matching и mrg_slam уходит в свои топики (кадры slam_odom -> base_link никому не нужны)
         tf_remap = [('/tf', f'/{r}/slam_tf'), ('/tf_static', f'/{r}/slam_tf_static')]
         cloud = [('velodyne_points', shared['points_topic']), ('imu/data', shared['imu_topic'])]
@@ -88,7 +104,7 @@ def launch_setup(context):
             ComposableNode(package='mrg_slam', plugin='mrg_slam::MrgSlamComponent',
                            name='mrg_slam_component', namespace=r, parameters=[slam, shared],
                            extra_arguments=[{'use_intra_process_comms': True}],
-                           remappings=[('imu/data', shared['imu_topic'])] + tf_remap),
+                           remappings=[('imu/data', shared['imu_topic'])] + tf_remap + no_bcast),
         ]))
     # облако без точек пола (см. slam_cloud_crop.py), один узел на всех
     if crop:
@@ -106,6 +122,7 @@ def generate_launch_description():
         DeclareLaunchArgument('n', default_value='3'),
         DeclareLaunchArgument('poses', default_value='', description='"x,y,yaw;x,y,yaw;..." точки старта в world'),
         DeclareLaunchArgument('loop_closure', default_value='false', description='замыкания петель mrg_slam (см. комментарий выше)'),
+        DeclareLaunchArgument('graph_exchange', default_value='auto', description='обмен графами mrg_slam между роботами напрямую по ROS (мимо comms_sim): auto = как loop_closure'),
         DeclareLaunchArgument('init_guess', default_value='false', description='колёсная одометрия как начальное приближение scan matching'),
         DeclareLaunchArgument('deg_lambda0', default_value='200.0', description='сумма n*n^T, при которой scan matching верим наполовину (fusion=degeneracy)'),
         DeclareLaunchArgument('config', default_value='', description='другой yaml с параметрами mrg_slam (для экспериментов)'),

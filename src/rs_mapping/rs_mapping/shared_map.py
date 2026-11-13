@@ -42,7 +42,7 @@ def quat_to_matrix(q):
 class SharedMap(Node):
     def __init__(self):
         super().__init__('shared_map')
-        self.declare_parameter('robots', ['ground_1', 'ground_2', 'ground_3'])
+        self.declare_parameter('robots', [], ParameterDescriptor(dynamic_typing=True))
         self.declare_parameter('gt_file', '')
         self.declare_parameter('bounds', [-13.0, -11.0, 13.0, 11.0])
         self.declare_parameter('resolution', 0.05)
@@ -64,7 +64,9 @@ class SharedMap(Node):
         self.declare_parameter('free_z_max', 2.5)     # выше этого лидар не режет свободное, м
         self.declare_parameter('layers', False)       # Фаза 6: слой на каждого робота вместо общей карты
 
-        self.robots = list(self.get_parameter('robots').value)
+        self.robots = list(self.get_parameter('robots').value or [])
+        if not self.robots:
+            raise RuntimeError('параметр robots пуст: список роботов задаёт launch (explore.launch.py / slam.launch.py), запасного списка нет')
         self.air_robots = list(self.get_parameter('air_robots').value or [])
         res = float(self.get_parameter('resolution').value)
         gt = self.get_parameter('gt_file').value

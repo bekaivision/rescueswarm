@@ -71,7 +71,7 @@ class Explorer(Node):
         P('publish_cells', False)
         P('done_cycles', 3)
         P('start_stagger', 12.0)      # робот i стартует через (i-1)*stagger с после активации Nav2: вход узкий
-        P('robots', ['ground_1', 'ground_2', 'ground_3'])               # все роботы (порядок = порядок поз в /fleet/poses)
+        P('robots', [], ParameterDescriptor(dynamic_typing=True))   # все роботы (порядок = порядок поз в /fleet/poses); обязателен, задаёт launch
         P('near_robot_dist', 2.0)     # неудача цели ближе этого к другому роботу = временная
         P('temp_blacklist_ttl', 20.0)
         P('block_time', 4.0)          # стоим с целью дольше этого рядом с роботом = заблокированы
@@ -87,6 +87,7 @@ class Explorer(Node):
         P('inspect_align_timeout', 6.0)
         P('inspect_max_fails', 2)     # столько неудач осмотра -> кандидат оставлен
         P('inspect_cooldown', 15.0)   # после неудачи этот робот столько секунд не берёт этого кандидата
+        P('inspect_fail_min_s', 2.0)   # отказ Nav2 раньше этого после отправки цели = сбой инфраструктуры (TF): не считается неудачей, но кулдаун есть
         P('inspect_bearing_pen', 4.0)  # штраф точке с той же стороны, откуда уже смотрели, м
         P('inspect_max_bids', 4)
         P('inspect_noreach_s', 60.0)   # кандидат без достижимой точки осмотра дольше этого -> оставлен (даже при фронтирах)
@@ -102,6 +103,9 @@ class Explorer(Node):
         P('home_retries', 3)
 
         self.me = self.get_parameter('robot_id').value
+        self.robots = list(self.get_parameter('robots').value or [])
+        if not self.robots:
+            raise RuntimeError('параметр robots пуст: список роботов задаёт launch (explore.launch.py), запасного списка нет')
         self.idx = int(self.me.split('_')[-1])
         self.region = list(self.get_parameter('region').value)
         self.K = int(self.get_parameter('num_bids').value)
@@ -225,7 +229,7 @@ class Explorer(Node):
             self.trail.append((p.x, p.y))
 
     def _on_fleet(self, msg):
-        ids = list(self.get_parameter('robots').value)
+        ids = self.robots
         self.fleet = {rid: (p.position.x, p.position.y) for rid, p in zip(ids, msg.poses)
                       if rid != self.me and math.isfinite(p.position.x)}
 
@@ -357,7 +361,11 @@ class Explorer(Node):
         holder.append(self.create_timer(float(gp('auction_delay').value), run_auction))
 
     def _auction(self):
-        top, now = self.top, self._now()
+        now = self._now()
+        # снимок ставок сделан в _cycle, а за auction_delay мог прийти результат Nav2 и включить кулдаун:
+        # заблокированных и оставленных кандидатов из своих ставок убираем (иначе цель уйдёт заново сразу)
+        top = [b for b in self.top
+               if not b[4] or (now >= self.insp_block.get(b[4], 0.0) and b[4] not in self.gave_local)]
         table = {self.me: [(c, x, y, self._gkey(k)) for c, x, y, _, k in top]}
         for rid, (_, msg) in self.table.items():
             ids = list(msg.target_ids) + [''] * len(msg.targets)
@@ -424,7 +432,7 @@ class Explorer(Node):
         self._send_goal(x, y, key)
 
     # --- роботы друг с другом -------------------------------------------------
-    def _fail_goal(self, x, y, why):
+    def _fail_goal(self, x, y, why, transient=False):
         """Неудача цели. Рядом другой робот: виноват он, цель блокируем ненадолго и без снятия с мели."""
         d, rid, _ = self._nearest_other()
         if self.goal_key:
@@ -434,7 +442,7 @@ class Explorer(Node):
                 self.insp_block[key] = self._now() + float(self.get_parameter('temp_blacklist_ttl').value)
                 self.get_logger().warn(f'осмотр {key}: {why}, рядом {rid} в {d:.1f} м: временно')
             else:
-                self._inspect_fail(key, why)
+                self._inspect_fail(key, why, transient=transient)
                 self._note_failure()
             return
         if d < float(self.get_parameter('near_robot_dist').value):
@@ -575,13 +583,14 @@ class Explorer(Node):
             self._mark_gave(key)
             self.get_logger().warn(f'кандидат {key} оставлен: {why}')
 
-    def _inspect_fail(self, key, why, cooldown=None):
+    def _inspect_fail(self, key, why, cooldown=None, transient=False):
         gp = self.get_parameter
         now = self._now()
-        n = self.insp_fail.get(key, 0) + 1
+        n = inspection.count_fail(self.insp_fail.get(key, 0), transient)
         self.insp_fail[key] = n
         self.insp_block[key] = now + (float(gp('inspect_cooldown').value) if cooldown is None else cooldown)
-        self.get_logger().warn(f'осмотр {key} не удался ({why}), неудач {n}/{int(gp("inspect_max_fails").value)}')
+        tr = ', сбой сразу после отправки: не в счёт' if transient else ''
+        self.get_logger().warn(f'осмотр {key} не удался ({why}{tr}), неудач {n}/{int(gp("inspect_max_fails").value)}')
         if n >= int(gp('inspect_max_fails').value) and key not in self.gave_local:
             self._mark_gave(key)
             self.get_logger().warn(f'кандидат {key} оставлен после {n} неудач осмотра')
@@ -811,7 +820,8 @@ class Explorer(Node):
                                    float(self.get_parameter('blacklist_radius').value)))
         else:
             self.stats['failed'] += 1
-            self._fail_goal(gx, gy, f'Nav2 статус {status}')
+            quick = inspection.is_transient_fail(self._now() - self.goal_t0, float(self.get_parameter('inspect_fail_min_s').value))
+            self._fail_goal(gx, gy, f'Nav2 статус {status}', transient=bool(self.goal_key) and quick)
         self.goal = None
         self.goal_key = ''
         self.goal_handle = None
@@ -964,7 +974,7 @@ class Explorer(Node):
         self.bid_pub.publish(msg)
 
     def _publish_markers(self, an, cands):
-        col = COLORS.get(self.idx, (1.0, 1.0, 1.0))
+        col = COLORS[(self.idx - 1) % len(COLORS) + 1]   # робот 6 и дальше берёт цвета по кругу
         arr = MarkerArray()
         m = Marker()
         m.header.frame_id = 'world'

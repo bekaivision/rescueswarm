@@ -34,3 +34,8 @@ log_px4/
 build_p6/
 install_p6/
 log_p6/
+
+# Фаза 7a: замороженные сборки для серий прогонов
+build_p7/
+install_p7/
+log_p7/

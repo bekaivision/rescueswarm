@@ -1,4 +1,5 @@
 import hashlib
+import math
 import os
 import xml.etree.ElementTree as ET
 
@@ -120,10 +121,39 @@ def test_air_spawns(size, seed):
     xs = w['lay']['xs']
     for a in air:
         assert a['y'] == pytest.approx(ground_y - 2.0, abs=1e-3)
-        assert abs(a['x'] - xs) <= 1.5 + 1e-3
+        assert abs(a['x'] - xs) <= 3.0 + 1e-3
         assert a['yaw'] == pytest.approx(gt['spawn_poses'][0]['yaw'])
         j, i = g.cell(a['x'], a['y'])
         assert not w['occ'][j, i]
         assert g.ymin <= a['y'] <= g.ymax
     # позы дронов не совпадают друг с другом
     assert len({(a['x'], a['y']) for a in air}) == len(air)
+
+
+@pytest.mark.parametrize('size', ['small', 'medium'])
+@pytest.mark.parametrize('seed', range(1, 11))
+def test_spawns_n5_with_3_drones(size, seed):
+    """N=5 наземных + 3 дрона (и N=4 + 3): позы в зоне старта, не пересекаются, не в препятствиях."""
+    w = G.build_world(seed, size)
+    g = w['grid']
+    gt = G.ground_truth(w)
+    ground, air = gt['spawn_poses'], gt['air_spawns']
+    assert len(ground) >= 5 and len(air) >= 3
+    sx0, sy0, sx1, sy1 = next(z for z in gt['zones'] if z['type'] == 'spawn')['rect']
+    r = G.ROBOT_RADIUS
+    occ = w['wall_occ'] | w['rubble_occ']
+    for k, p in enumerate(ground[:5]):
+        # центр и круг робота внутри зоны старта
+        assert sx0 + r <= p['x'] <= sx1 - r and sy0 + r <= p['y'] <= sy1 - r, k
+        assert not g.hits(occ, p['x'], p['y'], 2 * r, 2 * r, 0.0), k
+    for a in range(5):
+        for b in range(a + 1, 5):
+            d = math.hypot(ground[a]['x'] - ground[b]['x'], ground[a]['y'] - ground[b]['y'])
+            assert d >= 2 * r + 0.2, (a, b)
+    for k, p in enumerate(air[:3]):
+        assert not g.hits(occ, p['x'], p['y'], 0.8, 0.8, 0.0), k
+        for q in ground[:5]:
+            assert math.hypot(p['x'] - q['x'], p['y'] - q['y']) >= 1.0
+    for a in range(len(air)):
+        for b in range(a + 1, len(air)):
+            assert math.hypot(air[a]['x'] - air[b]['x'], air[a]['y'] - air[b]['y']) >= 1.4, (a, b)

@@ -40,12 +40,16 @@ COMMSARG  := $(if $(COMMS),comms:=true link:=$(COMMS) $(if $(OUTAGES),outages:='
 # check-phase6: уровни связи, тест обрыва (OUTAGE=0 пропускает его)
 LEVELS    ?= ideal good medium poor
 OUTAGE    ?= 1
+# check-phase5: MODES="mixed" пропускает прогоны только наземных роботов
+MODES     ?= ground mixed
+# check-phase7a: PARTS - части проверки (light px4 n5)
+PARTS     ?= light px4 n5
 # видео Фазы 5 снимается с PX4 (VIDEO_DBACK=light - с лёгкими дронами)
 VIDEO_DBACK ?= px4
 # все ROS-команды запускаются после source install/setup.bash
 WS        := source /workspace/install/setup.bash
 
-.PHONY: help image shell deps build test sim sim-headless sim-robots sim-robots-headless explore explore-headless search search-headless teleop check-phase1 check-phase2 check-phase3 check-phase4 check-phase5 check-phase6 px4-smoke eval video slam-smoke
+.PHONY: help image shell deps build test sim sim-headless sim-robots sim-robots-headless explore explore-headless search search-headless teleop check-phase1 check-phase2 check-phase3 check-phase4 check-phase5 check-phase6 check-phase7a px4-smoke eval video slam-smoke
 
 help: ## Показать команды
 	@echo "make image [NOCACHE=1]      собрать образ rescueswarm-dev:jazzy"
@@ -71,6 +75,7 @@ help: ## Показать команды
 	@echo "make check-phase5 [CHECK_SEEDS=\"1 2 3 7\"] [N=3] [MAX_SIM_S=900] [DRONES=2]  проверка Фазы 5: на каждом seed только наземные роботы и смешанный рой, сводка в results/phase-5/check/summary.md"
 	@echo "  COMMS=ideal|good|medium|poor для explore*/search*: Фаза 6, радиосвязь через comms_sim (OUTAGES='ground_1:60:180;drone_1:100:200' - обрывы связи узлов)"
 	@echo "make check-phase6 [CHECK_SEEDS=\"1 2 3 7\"] [N=3] [MAX_SIM_S=900] [DRONES=2] [LEVELS=\"ideal good medium poor\"] [OUTAGE=1]  проверка Фазы 6: поиск людей смешанным роем при разных уровнях связи и тест обрыва, сводка в results/phase-6/check/summary.md"
+	@echo "make check-phase7a [CHECK_SEEDS=\"1 2 3 7\"] [MAX_SIM_S=900] [PARTS=\"light px4 n5\"]  проверка Фазы 7a: SLAM + 2 дрона + связь medium на каждом seed (light и px4), N=5; сводка в results/phase-7a/check/summary.md"
 	@echo "make px4-smoke              Фаза 5: два дрона PX4 SITL летят в offboard из ROS 2, результаты в results/phase-5/px4_smoke/"
 	@echo "make eval                   заглушка (появится вместе с rs_eval), завершается с кодом 1"
 	@echo "make check-phase3 [CHECK_SEEDS=\"1 2 3 7\"] [N=3] [MAX_SIM_S=900] [RGB=1]  проверка Фазы 3: поиск людей на нескольких seed, результаты в results/phase-3/check/ (RGB=0: только тепловизор, results/phase-3/check_thermal_only/)"
@@ -135,10 +140,13 @@ check-phase4:
 	SEEDS="$(CHECK_SEEDS)" N="$(N)" MAX_SIM_S="$(MAX_SIM_S)" RGB="$(RGB)" "$(CURDIR)/scripts/check_phase4.sh"
 
 check-phase5:
-	SEEDS="$(CHECK_SEEDS)" N="$(N)" MAX_SIM_S="$(MAX_SIM_S)" DRONES="$(if $(filter 0,$(DRONES)),2,$(DRONES))" DBACK="$(DBACK)" "$(CURDIR)/scripts/check_phase5.sh"
+	SEEDS="$(CHECK_SEEDS)" N="$(N)" MAX_SIM_S="$(MAX_SIM_S)" DRONES="$(if $(filter 0,$(DRONES)),2,$(DRONES))" DBACK="$(DBACK)" MODES="$(MODES)" "$(CURDIR)/scripts/check_phase5.sh"
 
 check-phase6:
 	SEEDS="$(CHECK_SEEDS)" N="$(N)" MAX_SIM_S="$(MAX_SIM_S)" DRONES="$(if $(filter 0,$(DRONES)),2,$(DRONES))" LEVELS="$(LEVELS)" OUTAGE="$(OUTAGE)" "$(CURDIR)/scripts/check_phase6.sh"
+
+check-phase7a:
+	SEEDS="$(CHECK_SEEDS)" MAX_SIM_S="$(MAX_SIM_S)" PARTS="$(PARTS)" "$(CURDIR)/scripts/check_phase7a.sh"
 
 # Фаза 5: PX4 SITL (два дрона, offboard) без нашего мира; нужен install_px4 (px4_msgs, см. deps.repos)
 px4-smoke:

@@ -37,7 +37,8 @@ class PeopleFusion(Node):
         for k, v in M.DEFAULTS.items():
             self.declare_parameter(k, v)
         self.declare_parameter('out_dir', '')
-        self.declare_parameter('robots', ['ground_1', 'ground_2', 'ground_3'])
+        # наземные роботы в порядке /fleet/poses; обязателен (launch всегда передаёт), dynamic_typing: пустой список без типа
+        self.declare_parameter('robots', [], ParameterDescriptor(dynamic_typing=True))
         # дроны (Фаза 5); dynamic_typing: пустой список из launch не имеет типа
         self.declare_parameter('air_robots', [], ParameterDescriptor(dynamic_typing=True))
         self.declare_parameter('obs_topic', '')       # '' = старый режим (прямые топики)
@@ -51,7 +52,10 @@ class PeopleFusion(Node):
         self.map = None
         map_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              reliability=ReliabilityPolicy.RELIABLE)
-        self.robots = list(self.get_parameter('robots').value)
+        self.robots = list(self.get_parameter('robots').value or [])
+        if not self.robots:
+            raise ValueError('people_fusion: параметр robots пуст. Нужен список наземных роботов в порядке /fleet/poses '
+                             "(например robots:=['ground_1','ground_2']); launch передаёт его всегда.")
         self.obs_topic = self.get_parameter('obs_topic').value
         ns = self.get_parameter('people_ns').value.rstrip('/')
         self.create_subscription(OccupancyGrid, self.get_parameter('map_topic').value, self._on_map, map_qos)

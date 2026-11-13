@@ -42,7 +42,7 @@ class Agent(Node):
         d = self.declare_parameter
         d('me', 'ground_1')
         d('kind', 'ground')                 # ground | air | base
-        d('robots', ['ground_1', 'ground_2', 'ground_3'])
+        d('robots', [], ParameterDescriptor(dynamic_typing=True))            # обязателен, задаёт launch
         d('air_robots', [], ParameterDescriptor(dynamic_typing=True))
         d('gt_file', '')
         d('bounds', [-13.0, -11.0, 13.0, 11.0])   # запасной вариант, если gt_file пуст
@@ -65,7 +65,9 @@ class Agent(Node):
         g = lambda k: self.get_parameter(k).value  # noqa: E731
         self.me = g('me')
         self.kind = g('kind')
-        self.robots = list(g('robots'))
+        self.robots = list(g('robots') or [])
+        if not self.robots:
+            raise RuntimeError('параметр robots пуст: список роботов задаёт launch (explore.launch.py / slam.launch.py), запасного списка нет')
         self.air_robots = list(g('air_robots') or [])
         self.beacon_period = float(g('beacon_period'))
         self.map_resend_s = float(g('map_resend_s'))

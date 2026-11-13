@@ -11,15 +11,18 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformException, TransformListener
+from rcl_interfaces.msg import ParameterDescriptor
 
 
 class PoseFromTf(Node):
     def __init__(self):
         super().__init__('pose_from_tf')
-        self.declare_parameter('robots', ['ground_1', 'ground_2', 'ground_3'])
+        self.declare_parameter('robots', [], ParameterDescriptor(dynamic_typing=True))
         self.declare_parameter('rate', 20.0)
         self.declare_parameter('global_frame', 'world')
-        self.robots = list(self.get_parameter('robots').value)
+        self.robots = list(self.get_parameter('robots').value or [])
+        if not self.robots:
+            raise RuntimeError('параметр robots пуст: список роботов задаёт launch (explore.launch.py / slam.launch.py), запасного списка нет')
         self.frame = self.get_parameter('global_frame').value
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True)

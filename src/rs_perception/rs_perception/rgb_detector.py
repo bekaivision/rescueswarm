@@ -8,6 +8,7 @@ import time
 
 import numpy as np
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rs_interfaces.msg import RgbDetection
@@ -26,7 +27,7 @@ class RgbDetector(Node):
     def __init__(self):
         super().__init__('rgb_detector')
         P = self.declare_parameter
-        P('robots', ['ground_1', 'ground_2', 'ground_3'])
+        P('robots', [], ParameterDescriptor(dynamic_typing=True))   # обязателен: список наземных роботов из launch
         P('model', '/opt/yolo/yolo11n.pt')
         P('imgsz', 640)
         P('conf', 0.10)
@@ -37,7 +38,10 @@ class RgbDetector(Node):
         g = lambda k: self.get_parameter(k).value  # noqa: E731
         self.hfov = float(g('hfov'))
         self.imgsz, self.conf = int(g('imgsz')), float(g('conf'))
-        self.robots = list(g('robots'))
+        self.robots = list(g('robots') or [])
+        if not self.robots:
+            raise ValueError('rgb_detector: параметр robots пуст. Нужен список наземных роботов '
+                             "(например robots:=['ground_1','ground_2']); launch передаёт его всегда.")
         self.model = None
         self.device = 'cpu'
         if g('enabled'):
