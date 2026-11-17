@@ -15,7 +15,7 @@ setup(
     maintainer='Bekai Vision',
     maintainer_email='bigalex95@users.noreply.github.com',
     description='Shared occupancy grid built from all robots lidars',
-    license='Apache-2.0',
+    license='AGPL-3.0-only',
     extras_require={'test': ['pytest']},
     entry_points={'console_scripts': ['shared_map = rs_mapping.shared_map:main',
                                       'other_robots = rs_mapping.other_robots:main',

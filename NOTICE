@@ -1,0 +1,85 @@
+RescueSwarm
+Copyright (C) 2026 Alibek Erkabayev / Bekai Vision
+https://github.com/bekaivision/rescueswarm
+
+(The first commit in this repository is dated 2026-11-07.)
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License, version 3 only, as
+published by the Free Software Foundation. The full text is in the file
+LICENSE. This program is distributed WITHOUT ANY WARRANTY; without even the
+implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+SPDX-License-Identifier: AGPL-3.0-only
+
+Not covered by the code license
+-------------------------------
+assets/brand/ (the Bekai Vision logo) is a brand asset. All rights reserved.
+It is not licensed under the AGPL and may not be reused without permission.
+
+Third-party components
+----------------------
+Nothing below is copied into this repository except where stated. Components
+are downloaded when the Docker image is built (docker/Dockerfile) or when
+`make deps` runs (deps.repos). Each keeps its own license.
+
+Rescue Randy (3D model and textures)
+  Author: Open Robotics. Source: Gazebo Fuel,
+  https://fuel.gazebosim.org/1.0/OpenRobotics/models/Rescue%20Randy/3
+  License: Creative Commons Attribution 4.0 (CC BY 4.0),
+  https://creativecommons.org/licenses/by/4.0/
+  Used unmodified as the "person" in generated worlds. Fetched at Docker build
+  time, not stored in this repository. Videos and images that show it carry
+  the same credit.
+
+Ultralytics YOLO11 (ultralytics Python package and yolo11n/yolo11s weights)
+  License: AGPL-3.0. Weights are downloaded at image build time. The optional
+  RGB detector (src/rs_perception/rs_perception/rgb_detector.py) imports
+  ultralytics directly. This is one reason the project is AGPL-3.0-only.
+
+PX4 Autopilot v1.17.0 (including the x500 model) and px4_msgs v1.17.0
+  License: BSD-3-Clause. https://github.com/PX4/PX4-Autopilot,
+  https://github.com/PX4/px4_msgs
+
+Micro XRCE-DDS Agent v2.4.3
+  License: Apache-2.0. https://github.com/eProsima/Micro-XRCE-DDS-Agent
+
+mrg_slam (multi-robot graph SLAM), https://github.com/aserbremen/mrg_slam
+  License: BSD-2-Clause. Copyright (c) 2019 k.koide (derived from
+  hdl_graph_slam). Pinned in deps.repos.
+  patches/mrg_slam-init-guess-sign.patch is a one-line modification of
+  apps/scan_matching_odometry_component.cpp from this BSD-2-Clause code. The
+  patch is kept for the record; the project does not apply it by default
+  (see docs/PHASE_7A_REPORT.md).
+
+ndt_omp (aserbremen fork), https://github.com/aserbremen/ndt_omp
+  License: BSD-2-Clause. Copyright (c) 2019 k.koide. Pinned in deps.repos.
+
+fast_gicp, https://github.com/SMRT-AIST/fast_gicp
+  License: BSD-3-Clause. Pinned in deps.repos.
+
+small_gicp, https://github.com/koide3/small_gicp
+  License: MIT. Pinned in deps.repos.
+
+mrg_slam_msgs, https://github.com/aserbremen/mrg_slam_msgs
+  License: not declared upstream (its package.xml says "TODO: License
+  declaration" and the repository has no LICENSE file). It is fetched by
+  `make deps` and is not redistributed here.
+
+ROS 2 Jazzy, Nav2, Gazebo Harmonic (ros_gz)
+  License: Apache-2.0 (some ROS packages are BSD).
+
+Cyclone DDS (RMW)
+  License: Eclipse Public License 2.0 / Eclipse Distribution License 1.0.
+
+PyTorch / torchvision (CUDA 12.6 wheels)
+  License: BSD-3-Clause. The bundled NVIDIA CUDA libraries fall under the
+  NVIDIA CUDA EULA.
+
+Other Python dependencies (numpy, scipy, Pillow, PyYAML, matplotlib, pytest)
+  Permissive licenses, installed from PyPI or apt.
+
+The Docker image also installs packages from Ubuntu and PyPI under their own
+licenses, for example opencv-python-headless (Apache-2.0), g2o, Ceres Solver,
+GeographicLib and SuiteSparse (some SuiteSparse modules are GPL or LGPL). They
+are not redistributed in this repository.

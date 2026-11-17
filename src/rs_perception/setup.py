@@ -15,7 +15,7 @@ setup(
     maintainer='Bekai Vision',
     maintainer_email='bigalex95@users.noreply.github.com',
     description='Thermal people detection and mark fusion',
-    license='Apache-2.0',
+    license='AGPL-3.0-only',
     extras_require={'test': ['pytest']},
     entry_points={'console_scripts': [
         'thermal_detector = rs_perception.thermal_detector:main',

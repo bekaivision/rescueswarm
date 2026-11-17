@@ -15,7 +15,7 @@ setup(
     maintainer='Bekai Vision',
     maintainer_email='bigalex95@users.noreply.github.com',
     description='Procedural disaster-building world generator',
-    license='Apache-2.0',
+    license='AGPL-3.0-only',
     extras_require={'test': ['pytest']},
     entry_points={'console_scripts': ['generate_world = rs_worlds.generate:main']},
 )

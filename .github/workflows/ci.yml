@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast pure-Python subset: no ROS install needed.
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"  # matches ROS 2 Jazzy / Ubuntu 24.04
+          cache: pip
+          cache-dependency-path: .github/workflows/ci.yml
+      - name: Install dependencies
+        run: pip install "numpy<2" scipy pillow pyyaml matplotlib pytest
+      - name: Run unit tests
+        # test_sync_wait and test_slam_adapter import rclpy at module top; they run in the colcon job.
+        run: |
+          PYTHONPATH=$(ls -d "$PWD"/src/rs_*/ | paste -sd: -) \
+          python3 -m pytest src/*/test -q \
+            --ignore=src/rs_eval/test/test_sync_wait.py \
+            --ignore=src/rs_mapping/test/test_slam_adapter.py
+
+  # Real ROS 2 build + tests. rs_bringup / rs_description are skipped (need gz / nav2_bringup).
+  colcon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: ros:jazzy-ros-base
+    env:
+      PKGS: rs_interfaces rs_comms rs_drone rs_eval rs_exploration rs_mapping rs_perception rs_worlds
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3-colcon-common-extensions python3-pytest \
+            python3-numpy python3-scipy python3-pil python3-yaml python3-matplotlib \
+            ros-jazzy-nav2-msgs ros-jazzy-tf2-ros-py ros-jazzy-sensor-msgs-py \
+            ros-jazzy-visualization-msgs ros-jazzy-lifecycle-msgs ros-jazzy-action-msgs
+      - name: Build
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --packages-select $PKGS
+      - name: Test
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          colcon test --packages-select $PKGS --event-handlers console_direct+
+          colcon test-result --verbose

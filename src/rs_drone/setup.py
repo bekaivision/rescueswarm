@@ -16,7 +16,7 @@ setup(
     maintainer='Bekai Vision',
     maintainer_email='bigalex95@users.noreply.github.com',
     description='Drone adapter: NavigateToPose, state, land, TF and pose over a light or PX4 flight backend',
-    license='Apache-2.0',
+    license='AGPL-3.0-only',
     extras_require={'test': ['pytest']},
     entry_points={'console_scripts': ['drone_adapter = rs_drone.drone_adapter:main']},
 )

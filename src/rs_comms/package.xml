@@ -4,7 +4,7 @@
   <version>0.1.0</version>
   <description>Модель связи роя (Фаза 6): узел comms_sim (дальность, стены, полоса, потери, задержка) и агент связи на каждом узле сети</description>
   <maintainer email="bigalex95@users.noreply.github.com">Bekai Vision</maintainer>
-  <license>Apache-2.0</license>
+  <license>AGPL-3.0-only</license>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rs_interfaces</exec_depend>
   <exec_depend>rs_perception</exec_depend>

@@ -4,7 +4,7 @@
   <version>0.1.0</version>
   <description>Метрики исследования: покрытие маски, CSV, графики и картинки итоговой карты</description>
   <maintainer email="bigalex95@users.noreply.github.com">Bekai Vision</maintainer>
-  <license>Apache-2.0</license>
+  <license>AGPL-3.0-only</license>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rs_interfaces</exec_depend>
   <exec_depend>nav_msgs</exec_depend>

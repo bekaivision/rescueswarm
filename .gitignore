@@ -4,8 +4,8 @@ install/
 log/
 
 # Experiments
-results/
-media/
+/results/
+/media/
 *.mcap
 *.db3
 
@@ -39,3 +39,12 @@ log_p6/
 build_p7/
 install_p7/
 log_p7/
+
+# Model weights, archives, tooling and secrets
+*.pt
+*.onnx
+*.engine
+*.zip
+.claude/
+.mcp.json
+.env.*

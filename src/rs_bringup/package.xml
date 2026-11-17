@@ -4,7 +4,7 @@
   <version>0.1.0</version>
   <description>Launch-файлы, миры и RViz-конфиг RescueSwarm</description>
   <maintainer email="bigalex95@users.noreply.github.com">Bekai Vision</maintainer>
-  <license>Apache-2.0</license>
+  <license>AGPL-3.0-only</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <exec_depend>rs_description</exec_depend>
   <exec_depend>ros_gz_sim</exec_depend>

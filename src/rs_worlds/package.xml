@@ -4,7 +4,7 @@
   <version>0.1.0</version>
   <description>Генератор процедурных миров "разрушенное здание" и файлов эталона (ground truth) для RescueSwarm</description>
   <maintainer email="bigalex95@users.noreply.github.com">Bekai Vision</maintainer>
-  <license>Apache-2.0</license>
+  <license>AGPL-3.0-only</license>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-scipy</exec_depend>
   <exec_depend>python3-pil</exec_depend>

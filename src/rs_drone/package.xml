@@ -4,7 +4,7 @@
   <version>0.1.0</version>
   <description>Адаптер дрона: взлёт, удержание, NavigateToPose, посадка, состояние, TF и поза (лёгкий полёт или PX4)</description>
   <maintainer email="bigalex95@users.noreply.github.com">Bekai Vision</maintainer>
-  <license>Apache-2.0</license>
+  <license>AGPL-3.0-only</license>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
