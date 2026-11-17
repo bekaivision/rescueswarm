@@ -40,57 +40,59 @@ All numbers are from simulation.
 
 ```mermaid
 flowchart LR
-  subgraph worlds[rs_worlds]
-    gen[generator: seed to world, ground truth]
+  subgraph pkgWorlds["rs_worlds"]
+    gen["world generator: seed to world"]
   end
-  subgraph sim[Gazebo Harmonic + rs_description + rs_bringup]
-    gz[ground robots: LiDAR, RGB, thermal, IMU]
-    air[drones: light model or PX4 SITL via XRCE-DDS]
-    nav[Nav2 per robot rs_bringup]
+  subgraph pkgSim["Gazebo Harmonic, rs_description, rs_bringup"]
+    ugv["ground robots: LiDAR, RGB, thermal, IMU"]
+    uav["drones: light model or PX4 SITL"]
+    nav["Nav2 per robot"]
   end
-  subgraph drone[rs_drone]
-    da[drone_adapter: light flight model / PX4 offboard bridge]
+  subgraph pkgDrone["rs_drone"]
+    dad["drone_adapter: light model or PX4 offboard"]
   end
-  subgraph perc[rs_perception]
-    th[thermal_detector / air_thermal_detector]
-    rgb[rgb_detector YOLO11]
-    fuse[people_fusion: marks]
+  subgraph pkgPerc["rs_perception"]
+    thd["thermal detectors, ground and air"]
+    rgb["rgb_detector: YOLO11"]
+    fus["people_fusion: marks"]
   end
-  subgraph map[rs_mapping]
-    slam[slam_adapter + mrg_slam]
-    sm[shared_map: ground and air layers]
+  subgraph pkgMap["rs_mapping"]
+    slm["slam_adapter and mrg_slam"]
+    smp["shared_map: ground and air layers"]
   end
-  subgraph expl[rs_exploration]
-    ex[explorer: frontier auction + inspection]
-    ax[air_explorer]
+  subgraph pkgExpl["rs_exploration"]
+    exg["explorer: frontier auction and inspection"]
+    exa["air_explorer"]
   end
-  subgraph comms[rs_comms]
-    cs[comms_sim radio model]
-    ag[onboard agents]
-    base[base station]
+  subgraph pkgComms["rs_comms"]
+    csim["comms_sim radio model"]
+    agt["onboard agents"]
+    bst["base station"]
   end
-  ev[rs_eval: coverage, metrics]
+  evl["rs_eval: coverage and metrics"]
 
-  gen --> sim
-  gz --> th
-  gz --> rgb
-  air --> th
-  th --> fuse
-  rgb --> fuse
-  gz --> slam
-  slam --> sm
-  fuse --> ex
-  sm --> ex
-  ax --> da
-  da --> air
-  ex --> nav --> gz
-  ag <--> cs
-  cs <--> base
-  ex -.-> ag
-  sm -.-> ag
-  fuse -.-> ag
-  sm --> ev
-  fuse --> ev
+  gen --> ugv
+  gen --> uav
+  ugv --> thd
+  ugv --> rgb
+  uav --> thd
+  thd --> fus
+  rgb --> fus
+  ugv --> slm
+  slm --> smp
+  fus --> exg
+  smp --> exg
+  exg --> nav
+  nav --> ugv
+  exa --> dad
+  dad --> uav
+  exg -.-> agt
+  smp -.-> agt
+  fus -.-> agt
+  agt --- csim
+  csim --- bst
+  smp --> evl
+  fus --> evl
 ```
 
 Packages: `rs_worlds` (world generator), `rs_description` (robot models), `rs_bringup` (launch files, Nav2 config), `rs_interfaces` (messages), `rs_exploration`, `rs_mapping`, `rs_perception`, `rs_drone`, `rs_comms`, `rs_eval`.
